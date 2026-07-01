@@ -20,6 +20,30 @@ Open the printed local URL. Without an API key the app still works, using a
 flat fallback travel-time estimate for every route (clearly flagged as
 "Estimated, not live" on affected trip cards).
 
+## Running it on GitHub (GitHub Pages)
+
+This is a static frontend, so it can be hosted for free on GitHub Pages.
+A ready-made workflow at `.github/workflows/deploy.yml` builds and deploys
+the app automatically on every push to `main`.
+
+1. **Push this repo to GitHub** (see the main project README/setup notes,
+   or just `git push` once you've added a remote).
+2. **Add your Maps key as a repo secret**: repo → *Settings* → *Secrets and
+   variables* → *Actions* → *New repository secret* → name it
+   `VITE_GOOGLE_MAPS_API_KEY`, paste the key (see the restriction steps
+   above — restrict it to your Pages URL's HTTP referrer once you know it).
+3. **Enable Pages**: repo → *Settings* → *Pages* → under "Build and
+   deployment", set **Source** to **GitHub Actions**.
+4. **Push to `main`** (or run the workflow manually from the *Actions* tab).
+   The site will publish to `https://<your-username>.github.io/<repo-name>/`.
+5. Once you know that URL, go back to Google Cloud Console and lock the API
+   key's HTTP referrer restriction to it (e.g.
+   `https://your-username.github.io/vmp-transfer-planner/*`).
+
+The build's `base` path is set automatically from the repo name via the
+`BASE_PATH` env var in the workflow, so no manual `vite.config.ts` edits
+are needed even if you rename the repo.
+
 ## Google Maps API key setup — read before deploying
 
 This app calls the **Distance Matrix** service (via the Google Maps
