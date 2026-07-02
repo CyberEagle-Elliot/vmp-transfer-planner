@@ -28,6 +28,9 @@ interface DriverRunState {
   lastLocation: string;
   tourWindows: { startTime: number; endTime: number }[];
   tripCount: number;
+  /** Accumulated driving/duty minutes today (deadhead + trip legs + tour windows) —
+   *  the fatigue measure used to balance workload across the fleet. */
+  workMinutes: number;
 }
 
 function initDriverStates(drivers: Driver[], anchorDayStart: number): Map<string, DriverRunState> {
@@ -43,6 +46,7 @@ function initDriverStates(drivers: Driver[], anchorDayStart: number): Map<string
       lastLocation: "base",
       tourWindows: [],
       tripCount: 0,
+      workMinutes: 0,
     });
   }
   return map;
@@ -259,13 +263,19 @@ async function checkFeasibility(
 
 function applyAssignment(state: DriverRunState, trip: Trip, feas: FeasibilityResult): void {
   state.tripCount++;
+  state.workMinutes += feas.travelToStartMinutes; // deadhead to reach the job
   if (trip.type === "arrival") {
+    const clientReadyTime = trip.time + minutesToMs(CLIENT_READY_BUFFER_MIN);
+    state.workMinutes += Math.max(0, (feas.completionTime - clientReadyTime) / 60000);
     state.freeAt = feas.completionTime;
     state.lastLocation = trip.to;
   } else if (trip.type === "departure") {
+    state.workMinutes += Math.max(0, (feas.completionTime - trip.time) / 60000);
     state.freeAt = feas.completionTime;
     state.lastLocation = MRU_AIRPORT;
   } else if (trip.type === "tour" && trip.tourWindow) {
+    state.workMinutes +=
+      (trip.tourWindow.endTime - trip.tourWindow.startTime) / 60000;
     state.freeAt = trip.tourWindow.endTime;
     state.lastLocation = trip.tourWindow.endLocation;
     state.tourWindows.push({
@@ -310,8 +320,11 @@ function unassignedAssignment(trip: Trip, reason: string): Assignment {
  *
  *  Comfortable drivers (slack ≥ 30 min) compete on, in order:
  *    1. priority       — high-priority drivers get trips first
- *    2. fewest trips   — distributes the day evenly within a priority tier
- *    3. least deadhead — whoever is already closest to the pickup
+ *    2. least deadhead — whoever is already closest to the pickup. Fewer empty
+ *       kilometres means less fuel burned, less driver fatigue, and more spare
+ *       capacity across the fleet for extra work.
+ *    3. least work so far — accumulated driving/duty minutes, so the day's
+ *       fatigue spreads evenly within a priority tier
  *    4. largest slack
  *
  *  If nobody is comfortable the trip is tight, and safety beats preference:
@@ -335,12 +348,12 @@ function pickBestDriver(
     if (c.driver.priority !== best.driver.priority) {
       return c.driver.priority < best.driver.priority ? c : best;
     }
-    const cCount = states.get(c.driver.id)!.tripCount;
-    const bestCount = states.get(best.driver.id)!.tripCount;
-    if (cCount !== bestCount) return cCount < bestCount ? c : best;
     if (c.feas.travelToStartMinutes !== best.feas.travelToStartMinutes) {
       return c.feas.travelToStartMinutes < best.feas.travelToStartMinutes ? c : best;
     }
+    const cWork = states.get(c.driver.id)!.workMinutes;
+    const bestWork = states.get(best.driver.id)!.workMinutes;
+    if (cWork !== bestWork) return cWork < bestWork ? c : best;
     return c.feas.routingSlackMinutes > best.feas.routingSlackMinutes ? c : best;
   });
 }
@@ -368,6 +381,7 @@ async function simulateLane(
     lastLocation: "base",
     tourWindows: [],
     tripCount: 0,
+    workMinutes: 0,
   };
   const result: Record<string, Assignment> = {};
   let ok = true;
@@ -633,6 +647,7 @@ export async function recomputeDriverLane(
     lastLocation: "base",
     tourWindows: [],
     tripCount: 0,
+    workMinutes: 0,
   };
 
   const updated: Record<string, Assignment> = { ...existingAssignments };

@@ -7,10 +7,29 @@ declare global {
   interface Window {
     google?: typeof google;
     __vmpGoogleMapsCallback?: () => void;
+    /** Standard hook Google Maps calls on API-key auth failures (bad key, referrer not allowed) */
+    gm_authFailure?: () => void;
   }
 }
 
 let loadPromise: Promise<void> | null = null;
+let authFailed = false;
+
+if (typeof window !== "undefined") {
+  window.gm_authFailure = () => {
+    authFailed = true;
+    console.warn(
+      "Google Maps rejected the API key for this site (check the key's HTTP referrer " +
+        "restrictions). Falling back to estimated travel times."
+    );
+  };
+}
+
+/** True once Google has rejected the key for this page (e.g. RefererNotAllowedMapError) —
+ *  callers should skip live lookups and go straight to estimates. */
+export function hasMapsAuthFailed(): boolean {
+  return authFailed;
+}
 
 function getApiKey(): string {
   return import.meta.env.VITE_GOOGLE_MAPS_API_KEY ?? "";
@@ -67,6 +86,9 @@ export async function fetchDistanceMatrix(
   destination: string,
   departureTime: Date
 ): Promise<RawDistanceResult> {
+  if (authFailed) {
+    throw new Error("Google Maps auth failed for this site");
+  }
   await loadGoogleMaps();
 
   return new Promise((resolve) => {

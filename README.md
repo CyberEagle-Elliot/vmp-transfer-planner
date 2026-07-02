@@ -138,13 +138,14 @@ persist across days and "Clear day".
 
 Each driver has a **priority** (High / Normal / Low, set in the roster).
 Among feasible drivers with a **comfortable margin** (≥ 30 min slack) the
-trip goes to, in order: the highest-priority driver, then whoever has the
-**fewest trips so far** (so the day spreads evenly within a priority tier),
-then whoever is **closest to the pickup** (least deadhead). If nobody has a
-comfortable margin, safety beats preference: the trip goes to the driver
-with the **largest slack**. If no driver is feasible, the trip is marked
-**UNASSIGNED** with the closest miss's reason shown — the app never
-double-books.
+trip goes to, in order: the highest-priority driver, then whoever is
+**closest to the pickup** (least deadhead — fewer empty kilometres means
+less fuel, less fatigue, and more spare capacity for extra jobs), then
+whoever has the **least accumulated driving/duty time** today (so fatigue
+spreads evenly within a priority tier). If nobody has a comfortable margin,
+safety beats preference: the trip goes to the driver with the **largest
+slack**. If no driver is feasible, the trip is marked **UNASSIGNED** with
+the closest miss's reason shown — the app never double-books.
 
 **Rescue pass.** The chronological sweep is deliberately greedy, so after it
 finishes, any trip left uncovered triggers a repair search: the planner
@@ -186,9 +187,22 @@ reset it. Corrections beat the live API for every hour of the day.
 Every origin→destination lookup passes `departure_time` so
 `duration_in_traffic` is used. Results are cached in memory and in
 `localStorage`, keyed by origin + destination + hour-of-day, since the same
-airport↔hotel pairs repeat many times a day. If a lookup fails or an
-address won't geocode, the app falls back to a static estimate and marks
-the affected trip card "Estimated, not live".
+airport↔hotel pairs repeat many times a day. Cached fallback estimates are
+ignored as soon as live lookups are possible again, so a temporary API
+failure can't lock in wrong times for the day.
+
+**Safety surplus**: planning adds a flat **15 minutes** on top of every
+travel leg (live, estimated, or corrected) to absorb loading, parking, and
+everyday traffic surprises. The travel-times panel shows the raw driving
+times.
+
+**No API key / lookup failed**: instead of one flat estimate for the whole
+island, the app recognizes the locality in each address (Grand Baie,
+Flic en Flac, Belle Mare, Trou d'Eau Douce, …) and estimates the driving
+time from the real geography — the airport→Grand Baie run comes out around
+70 min while airport→Blue Bay is minutes. Only when an address mentions no
+known locality does the flat 45 min fallback apply. Estimated legs are
+still flagged "Estimated, not live" on the trip cards.
 
 ## Project structure
 

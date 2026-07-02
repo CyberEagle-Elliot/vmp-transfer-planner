@@ -77,7 +77,9 @@ export default function TravelTimesPanel({ onOverridesApplied, isAssigning }: Pr
               <p className="travel-panel-hint">
                 Fix any duration that doesn't match reality, then apply — the day is
                 re-planned with your corrections (manual placements stay put).
-                Corrections are remembered for future days.
+                Corrections are remembered for future days. Times shown are raw
+                driving times; planning automatically adds a 15 min safety surplus
+                on top of every leg.
               </p>
               <table className="travel-table">
                 <thead>

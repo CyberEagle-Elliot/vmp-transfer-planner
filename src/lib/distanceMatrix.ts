@@ -1,5 +1,6 @@
 import type { DistanceCacheEntry, DistanceMatrixResult, TravelOverride } from "../types";
 import { fetchDistanceMatrix, isGoogleMapsConfigured } from "./googleMapsClient";
+import { estimateTravelMinutes } from "./mauritiusEstimator";
 import {
   loadDistanceCache,
   saveDistanceCache,
@@ -15,11 +16,44 @@ let manualOverrides: Record<string, TravelOverride> = loadTravelOverrides();
 
 const CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours — traffic patterns for a given hour-of-day are reused within a day
 
-/** Rough straight-line-ish static fallback (minutes) for common Mauritius airport <-> hotel
- *  belt routes, used only when the live API call fails or an address won't geocode.
- *  These are deliberately conservative (on the high side) since dispatch should
- *  prefer slack over an optimistic, unsafe estimate. */
+/** Last-resort flat fallback (minutes), used only when neither the live API nor
+ *  the Mauritius region estimator can resolve a route. Deliberately conservative. */
 const STATIC_FALLBACK_MINUTES = 45;
+
+/** Safety surplus added on top of every travel time used for planning, so the
+ *  schedule absorbs loading, parking, and everyday traffic surprises. Raw times
+ *  (as returned by Maps / the estimator / corrections) are what's cached and
+ *  shown in the travel-times panel; the surplus is applied at planning time. */
+const SAFETY_SURPLUS_MIN = 15;
+
+/** A live lookup that hasn't answered by then is treated as failed — a broken
+ *  key or flaky network must never hang the whole auto-assign run. */
+const LIVE_LOOKUP_TIMEOUT_MS = 8000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("travel-time lookup timed out")), ms);
+    promise.then(
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(timer);
+        reject(e);
+      }
+    );
+  });
+}
+
+function withSurplus(result: DistanceMatrixResult): DistanceMatrixResult {
+  return { ...result, durationMinutes: result.durationMinutes + SAFETY_SURPLUS_MIN };
+}
+
+function fallbackEstimate(origin: string, destination: string): DistanceMatrixResult {
+  const regional = estimateTravelMinutes(origin, destination);
+  return { durationMinutes: regional ?? STATIC_FALLBACK_MINUTES, estimated: true };
+}
 
 function normalizeLocation(loc: string): string {
   return loc.trim().toLowerCase().replace(/\s+/g, " ");
@@ -52,22 +86,26 @@ export async function getTravelTime(
   const trimmedDestination = destination.trim();
 
   if (!trimmedOrigin || !trimmedDestination) {
-    return { durationMinutes: STATIC_FALLBACK_MINUTES, estimated: true };
+    return withSurplus({ durationMinutes: STATIC_FALLBACK_MINUTES, estimated: true });
   }
   if (normalizeLocation(trimmedOrigin) === normalizeLocation(trimmedDestination)) {
-    return { durationMinutes: 5, estimated: false };
+    return withSurplus({ durationMinutes: 5, estimated: false });
   }
 
   // A dispatcher correction for this route always wins
   const override = manualOverrides[routeKey(trimmedOrigin, trimmedDestination)];
   if (override) {
-    return { durationMinutes: override.durationMinutes, estimated: false };
+    return withSurplus({ durationMinutes: override.durationMinutes, estimated: false });
   }
 
   const key = cacheKey(trimmedOrigin, trimmedDestination, departureTime);
   const cached = memoryCache[key];
   if (cached && Date.now() - cached.cachedAt < CACHE_TTL_MS) {
-    return { durationMinutes: cached.durationMinutes, estimated: cached.estimated };
+    // A cached fallback estimate must not block a live lookup once the API is
+    // available again — only serve it when live lookups aren't possible anyway.
+    if (!cached.estimated || !isGoogleMapsConfigured()) {
+      return withSurplus({ durationMinutes: cached.durationMinutes, estimated: cached.estimated });
+    }
   }
 
   const writeCache = (result: DistanceMatrixResult): DistanceMatrixResult => {
@@ -78,15 +116,18 @@ export async function getTravelTime(
       destination: trimmedDestination,
     };
     persistCache();
-    return result;
+    return withSurplus(result);
   };
 
   if (!isGoogleMapsConfigured()) {
-    return writeCache({ durationMinutes: STATIC_FALLBACK_MINUTES, estimated: true });
+    return writeCache(fallbackEstimate(trimmedOrigin, trimmedDestination));
   }
 
   try {
-    const raw = await fetchDistanceMatrix(trimmedOrigin, trimmedDestination, departureTime);
+    const raw = await withTimeout(
+      fetchDistanceMatrix(trimmedOrigin, trimmedDestination, departureTime),
+      LIVE_LOOKUP_TIMEOUT_MS
+    );
     if (raw.statusOk && (raw.durationInTrafficMinutes ?? raw.durationMinutes) != null) {
       return writeCache({
         durationMinutes: Math.round(
@@ -95,9 +136,9 @@ export async function getTravelTime(
         estimated: false,
       });
     }
-    return writeCache({ durationMinutes: STATIC_FALLBACK_MINUTES, estimated: true });
+    return writeCache(fallbackEstimate(trimmedOrigin, trimmedDestination));
   } catch {
-    return writeCache({ durationMinutes: STATIC_FALLBACK_MINUTES, estimated: true });
+    return writeCache(fallbackEstimate(trimmedOrigin, trimmedDestination));
   }
 }
 
