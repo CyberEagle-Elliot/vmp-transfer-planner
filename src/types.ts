@@ -61,6 +61,10 @@ export interface Trip {
 
 export type MarginColor = "green" | "yellow" | "red";
 
+/** How arrival waiting times are planned: per booking ID (60 min numeric /
+ *  75 min with letters) or forced to 60 min for everyone. */
+export type WaitMode = "byId" | "all60";
+
 export interface Assignment {
   tripId: string;
   driverId: string | null; // null = unassigned

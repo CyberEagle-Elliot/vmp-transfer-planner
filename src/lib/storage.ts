@@ -5,6 +5,7 @@ import type {
   Assignment,
   DistanceCacheEntry,
   TravelOverride,
+  WaitMode,
 } from "../types";
 
 const KEYS = {
@@ -14,6 +15,7 @@ const KEYS = {
   distanceCache: "vmp.distanceCache.v1",
   travelOverrides: "vmp.travelOverrides.v1",
   clientPreferences: "vmp.clientPreferences.v1",
+  waitMode: "vmp.waitMode.v1",
 } as const;
 
 function readJSON<T>(key: string, fallback: T): T {
@@ -78,6 +80,14 @@ export function loadTravelOverrides(): Record<string, TravelOverride> {
 }
 export function saveTravelOverrides(overrides: Record<string, TravelOverride>): void {
   writeJSON(KEYS.travelOverrides, overrides);
+}
+
+export function loadWaitMode(): WaitMode {
+  const raw = readJSON<string>(KEYS.waitMode, "byId");
+  return raw === "all60" ? "all60" : "byId";
+}
+export function saveWaitMode(mode: WaitMode): void {
+  writeJSON(KEYS.waitMode, mode);
 }
 
 export function loadClientPreferences(): Record<string, string> {

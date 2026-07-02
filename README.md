@@ -95,11 +95,15 @@ flagged in the preview table for manual fixing before you can auto-assign.
 Trips are processed in chronological order. Each driver tracks `freeAt`
 (when they're next available) and `lastLocation` (where they'll be).
 
-- **Arrival**: feasible if the driver can reach `MRU AIRPORT` at least 15
-  minutes before landing. On assignment, the driver becomes free after the
-  client-ready wait plus the drive time to the drop-off. The wait depends on
-  the booking `ID`: purely numeric IDs wait **60 minutes** after landing,
-  IDs containing letters wait **75 minutes**.
+- **Arrival**: the wait after landing depends on the booking `ID`: purely
+  numeric IDs wait **60 minutes**, IDs containing letters wait **75
+  minutes**. For 60-min clients the driver must reach `MRU AIRPORT` by
+  landing time (with a 15 min margin); for 75-min clients the driver may
+  arrive **up to 30 minutes after landing** — the client is still in
+  immigration. On assignment, the driver becomes free after the wait plus
+  the drive to the drop-off. The **"Waiting"** button in the header toggles
+  a mode where everyone is planned at a flat 60 minutes (and by-touchdown
+  deadlines); toggling re-plans the day immediately.
 - **Departure**: feasible if the driver can reach the pickup address at
   least 15 minutes before pickup time. On assignment, the driver becomes
   free at pickup time plus the drive time back to the airport.

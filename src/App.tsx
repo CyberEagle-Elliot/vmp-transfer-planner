@@ -1,5 +1,5 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
-import type { Assignment, Driver, ParsedTripRow, Trip } from "./types";
+import type { Assignment, Driver, ParsedTripRow, Trip, WaitMode } from "./types";
 import { classifyTrips } from "./lib/parser";
 import {
   autoAssign,
@@ -9,10 +9,12 @@ import {
 } from "./lib/assignment";
 import {
   loadAppState,
+  loadWaitMode,
   saveRoster,
   saveTrips,
   saveAssignments,
   saveClientPreferences,
+  saveWaitMode,
   clearTripsOnly,
 } from "./lib/storage";
 import { getMapsStatus, subscribeMapsStatus } from "./lib/googleMapsClient";
@@ -35,6 +37,7 @@ export default function App() {
   const [clientPreferences, setClientPreferences] = useState<Record<string, string>>(
     initial.clientPreferences
   );
+  const [waitMode, setWaitMode] = useState<WaitMode>(loadWaitMode());
   const [view, setView] = useState<View>(initial.trips.length > 0 ? "board" : "setup");
   const [isAssigning, setIsAssigning] = useState(false);
   const [assignProgress, setAssignProgress] = useState<{
@@ -80,15 +83,23 @@ export default function App() {
   async function runPlanning(
     drivers: Driver[],
     dayTrips: Trip[],
-    existing: Record<string, Assignment>
+    existing: Record<string, Assignment>,
+    mode: WaitMode
   ): Promise<Record<string, Assignment>> {
     setAssignProgress({ done: 0, total: 1, label: "Checking drive times" });
-    await prefetchRouteTimes(dayTrips, (done, total) =>
-      setAssignProgress({ done, total, label: "Checking drive times" })
+    await prefetchRouteTimes(
+      dayTrips,
+      (done, total) => setAssignProgress({ done, total, label: "Checking drive times" }),
+      mode
     );
     setAssignProgress({ done: 0, total: dayTrips.length + 1, label: "Planning" });
-    return autoAssign(drivers, dayTrips, existing, clientPreferences, (done, total) =>
-      setAssignProgress({ done, total, label: "Planning" })
+    return autoAssign(
+      drivers,
+      dayTrips,
+      existing,
+      clientPreferences,
+      (done, total) => setAssignProgress({ done, total, label: "Planning" }),
+      mode
     );
   }
 
@@ -96,7 +107,7 @@ export default function App() {
     setIsAssigning(true);
     const { trips: classified } = classifyTrips(rows.filter((r) => !r.parseError));
     try {
-      const result = await runPlanning(drivers, classified, {});
+      const result = await runPlanning(drivers, classified, {}, waitMode);
       setTrips(classified);
       setAssignments(result);
       setView("board");
@@ -107,17 +118,26 @@ export default function App() {
   }
 
   // Re-plans the whole day but keeps the dispatcher's manual placements pinned.
-  // Used by the re-run button and after travel-time corrections.
-  async function handleRerun() {
+  // Used by the re-run button, after travel-time corrections, and on wait-mode toggle.
+  async function handleRerun(mode: WaitMode = waitMode) {
     if (trips.length === 0) return;
     setIsAssigning(true);
     try {
-      const result = await runPlanning(roster, trips, assignments);
+      const result = await runPlanning(roster, trips, assignments, mode);
       setAssignments(result);
     } finally {
       setIsAssigning(false);
       setAssignProgress(null);
     }
+  }
+
+  // Toggles between per-ID waiting (60/75) and a flat 60 min for everyone,
+  // then immediately re-plans the day under the new rule.
+  function handleToggleWaitMode() {
+    const next: WaitMode = waitMode === "byId" ? "all60" : "byId";
+    setWaitMode(next);
+    saveWaitMode(next);
+    void handleRerun(next);
   }
 
   /** Remembers (or forgets, with null) a client's regular driver for future planning. */
@@ -157,7 +177,7 @@ export default function App() {
         const laneTrips = trips.filter(
           (t) => t.id === tripId || updated[t.id]?.driverId === newDriverId
         );
-        updated = await recomputeDriverLane(newDriver, laneTrips, updated);
+        updated = await recomputeDriverLane(newDriver, laneTrips, updated, waitMode);
       }
     }
 
@@ -168,7 +188,7 @@ export default function App() {
         const laneTrips = trips.filter(
           (t) => t.id !== tripId && updated[t.id]?.driverId === oldDriverId
         );
-        updated = await recomputeDriverLane(oldDriver, laneTrips, updated);
+        updated = await recomputeDriverLane(oldDriver, laneTrips, updated, waitMode);
       }
     }
 
@@ -214,8 +234,17 @@ export default function App() {
               </button>
               <button
                 type="button"
+                className="ghost"
+                onClick={handleToggleWaitMode}
+                disabled={isAssigning}
+                title="Toggle the arrival waiting rule and re-plan the day"
+              >
+                {waitMode === "byId" ? "Waiting: 60/75 by ID" : "Waiting: all 60 min"}
+              </button>
+              <button
+                type="button"
                 className="primary"
-                onClick={handleRerun}
+                onClick={() => handleRerun()}
                 disabled={isAssigning}
               >
                 {isAssigning ? "Re-running…" : "Re-run auto-assign"}

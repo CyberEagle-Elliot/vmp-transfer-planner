@@ -67,11 +67,38 @@ describe("autoAssign", () => {
 
   it("prefers the largest slack when the trip is tight, regardless of priority", async () => {
     // High-priority driver only starts at 11:30: with the 15 min buffer they make
-    // an 11:50 landing with just 5 min slack — the free normal driver is safer.
+    // an 11:50 landing (numeric ID — driver due by touchdown) with just 5 min
+    // slack — the free normal driver is safer.
     const highTight: Driver = { ...driver("d1", "HighTight", 1), shiftStart: 11 * 60 + 30 };
     const normalFree = driver("d2", "NormalFree", 2);
-    const result = await autoAssign([highTight, normalFree], [arrival("t1", at(11, 50))]);
+    const tightArrival = arrival("t1", at(11, 50));
+    tightArrival.clientId = "99";
+    const result = await autoAssign([highTight, normalFree], [tightArrival]);
     expect(result["t1"].driverId).toBe("d2");
+  });
+
+  it("lets the driver arrive up to 30 min after landing for 75-min waits only", async () => {
+    // Driver is free at 12:05; with the 15 min buffer they reach the airport
+    // "at" 12:20 for a 12:00 landing — 20 min late.
+    const lateStarter: Driver = { ...driver("d1", "LateStarter"), shiftStart: 12 * 60 + 5 };
+
+    const alphaArrival = arrival("t1", at(12));
+    alphaArrival.clientId = "C77"; // 75-min wait → 12:30 airport deadline
+    const alpha = await autoAssign([lateStarter], [alphaArrival]);
+    expect(alpha["t1"].driverId).toBe("d1");
+
+    const numericArrival = arrival("t2", at(12));
+    numericArrival.clientId = "77"; // 60-min wait → driver due by touchdown
+    const numeric = await autoAssign([lateStarter], [numericArrival]);
+    expect(numeric["t2"].driverId).toBeNull();
+  });
+
+  it("the all-60 mode shortens every wait and removes the late-arrival window", async () => {
+    const lateStarter: Driver = { ...driver("d1", "LateStarter"), shiftStart: 12 * 60 + 5 };
+    const alphaArrival = arrival("t1", at(12));
+    alphaArrival.clientId = "C77"; // would be feasible under byId (75-min rules)
+    const result = await autoAssign([lateStarter], [alphaArrival], {}, {}, undefined, "all60");
+    expect(result["t1"].driverId).toBeNull();
   });
 
   it("pins manual overrides across re-runs", async () => {

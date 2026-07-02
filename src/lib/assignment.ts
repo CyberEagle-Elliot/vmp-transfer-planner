@@ -1,4 +1,4 @@
-import type { Assignment, Driver, MarginColor, Trip } from "../types";
+import type { Assignment, Driver, MarginColor, Trip, WaitMode } from "../types";
 import { getTravelTime } from "./distanceMatrix";
 
 export const MRU_AIRPORT = "MRU AIRPORT";
@@ -7,8 +7,12 @@ export const MRU_AIRPORT = "MRU AIRPORT";
 const CLIENT_READY_BUFFER_ALPHA_MIN = 75;
 const CLIENT_READY_BUFFER_NUMERIC_MIN = 60;
 const TURNAROUND_BUFFER_MIN = 15;
+/** 75-min clients spend so long in immigration/baggage that the driver may
+ *  arrive at the airport up to this long AFTER landing and still be on time. */
+const LATE_AIRPORT_ARRIVAL_MIN = 30;
 
-function clientReadyBufferMin(trip: Trip): number {
+function clientReadyBufferMin(trip: Trip, waitMode: WaitMode): number {
+  if (waitMode === "all60") return CLIENT_READY_BUFFER_NUMERIC_MIN;
   const id = trip.clientId.trim();
   return id !== "" && /^[0-9]+$/.test(id)
     ? CLIENT_READY_BUFFER_NUMERIC_MIN
@@ -111,7 +115,8 @@ interface FeasibilityResult {
 async function checkFeasibility(
   trip: Trip,
   state: DriverRunState,
-  dayStart: number
+  dayStart: number,
+  waitMode: WaitMode = "byId"
 ): Promise<FeasibilityResult> {
   if (overlapsTourWindow(state, trip.time)) {
     return {
@@ -124,7 +129,15 @@ async function checkFeasibility(
     };
   }
 
-  if (!isWithinShiftStart(state.driver, dayStart, trip.time)) {
+  // For 75-min arrivals the job effectively starts up to 30 min after landing,
+  // so a shift beginning just after touchdown can still take the job.
+  const lateWindowMs =
+    trip.type === "arrival" &&
+    clientReadyBufferMin(trip, waitMode) >= CLIENT_READY_BUFFER_ALPHA_MIN
+      ? minutesToMs(LATE_AIRPORT_ARRIVAL_MIN)
+      : 0;
+
+  if (!isWithinShiftStart(state.driver, dayStart, trip.time + lateWindowMs)) {
     return {
       feasible: false,
       routingSlackMinutes: -Infinity,
@@ -140,13 +153,18 @@ async function checkFeasibility(
   const NO_TRAVEL = { durationMinutes: 0, estimated: false };
 
   if (trip.type === "arrival") {
-    const clientReadyTime = trip.time + minutesToMs(clientReadyBufferMin(trip));
+    const waitMin = clientReadyBufferMin(trip, waitMode);
+    const clientReadyTime = trip.time + minutesToMs(waitMin);
+    // 75-min clients are stuck in immigration/baggage long enough that the driver
+    // may reach the airport up to 30 min after landing; 60-min clients need the
+    // driver there by touchdown.
+    const airportDeadline = trip.time + lateWindowMs;
     const travelToAirport = state.lastLocation
       ? await getTravelTime(state.lastLocation, MRU_AIRPORT, new Date(state.freeAt))
       : NO_TRAVEL;
     const requiredArrival = state.freeAt + minutesToMs(travelToAirport.durationMinutes + TURNAROUND_BUFFER_MIN);
-    const feasibleRouting = requiredArrival <= trip.time;
-    const routingSlackMinutes = (trip.time - requiredArrival) / 60000;
+    const feasibleRouting = requiredArrival <= airportDeadline;
+    const routingSlackMinutes = (airportDeadline - requiredArrival) / 60000;
 
     const travelToDest = await getTravelTime(MRU_AIRPORT, trip.to, new Date(clientReadyTime));
     const completionTime = clientReadyTime + minutesToMs(travelToDest.durationMinutes);
@@ -271,11 +289,16 @@ async function checkFeasibility(
   };
 }
 
-function applyAssignment(state: DriverRunState, trip: Trip, feas: FeasibilityResult): void {
+function applyAssignment(
+  state: DriverRunState,
+  trip: Trip,
+  feas: FeasibilityResult,
+  waitMode: WaitMode = "byId"
+): void {
   state.tripCount++;
   state.workMinutes += feas.travelToStartMinutes; // deadhead to reach the job
   if (trip.type === "arrival") {
-    const clientReadyTime = trip.time + minutesToMs(clientReadyBufferMin(trip));
+    const clientReadyTime = trip.time + minutesToMs(clientReadyBufferMin(trip, waitMode));
     state.workMinutes += Math.max(0, (feas.completionTime - clientReadyTime) / 60000);
     state.freeAt = feas.completionTime;
     state.lastLocation = trip.to;
@@ -381,7 +404,8 @@ async function simulateLane(
   driver: Driver,
   laneTrips: Trip[],
   dayStart: number,
-  mustBeFeasible: (tripId: string) => boolean
+  mustBeFeasible: (tripId: string) => boolean,
+  waitMode: WaitMode = "byId"
 ): Promise<LaneSim> {
   const ordered = [...laneTrips].sort((a, b) => a.time - b.time);
   const state: DriverRunState = {
@@ -397,8 +421,8 @@ async function simulateLane(
   let ok = true;
 
   for (const trip of ordered) {
-    const feas = await checkFeasibility(trip, state, dayStart);
-    applyAssignment(state, trip, feas);
+    const feas = await checkFeasibility(trip, state, dayStart, waitMode);
+    applyAssignment(state, trip, feas, waitMode);
     if (feas.feasible) {
       result[trip.id] = buildAssignment(trip, driver, feas, dayStart);
     } else {
@@ -427,7 +451,8 @@ async function rescueUnassigned(
   drivers: Driver[],
   trips: Trip[],
   assignments: Record<string, Assignment>,
-  dayStart: number
+  dayStart: number,
+  waitMode: WaitMode = "byId"
 ): Promise<void> {
   const laneOf = (driverId: string) =>
     trips.filter((t) => assignments[t.id]?.driverId === driverId);
@@ -460,7 +485,8 @@ async function rescueUnassigned(
           overloaded,
           laneWithoutMoved,
           dayStart,
-          stillHealthy(uncovered.id)
+          stillHealthy(uncovered.id),
+          waitMode
         );
         if (!simFreed.ok) continue;
 
@@ -470,7 +496,8 @@ async function rescueUnassigned(
             colleague,
             laneOf(colleague.id).concat(moved),
             dayStart,
-            stillHealthy(moved.id)
+            stillHealthy(moved.id),
+            waitMode
           );
           if (!simColleague.ok) continue;
 
@@ -493,11 +520,12 @@ async function assignLocked(
   driver: Driver,
   states: Map<string, DriverRunState>,
   dayStart: number,
-  manualOverride: boolean
+  manualOverride: boolean,
+  waitMode: WaitMode = "byId"
 ): Promise<Assignment> {
   const state = states.get(driver.id)!;
-  const feas = await checkFeasibility(trip, state, dayStart);
-  applyAssignment(state, trip, feas);
+  const feas = await checkFeasibility(trip, state, dayStart, waitMode);
+  applyAssignment(state, trip, feas, waitMode);
   if (feas.feasible) {
     return { ...buildAssignment(trip, driver, feas, dayStart), manualOverride };
   }
@@ -524,7 +552,7 @@ export interface RoutePair {
  *  - end-location of any earlier trip → start-location of any later trip
  *    (the deadhead a driver would drive to chain the two)
  *  The abstract "base" start location is excluded — it has no real address. */
-export function buildPrefetchPairs(trips: Trip[]): RoutePair[] {
+export function buildPrefetchPairs(trips: Trip[], waitMode: WaitMode = "byId"): RoutePair[] {
   const pairs = new Map<string, RoutePair>();
   const add = (origin: string, destination: string, departAt: number) => {
     const o = origin.trim();
@@ -544,7 +572,7 @@ export function buildPrefetchPairs(trips: Trip[]): RoutePair[] {
 
   for (const trip of trips) {
     if (trip.type === "arrival") {
-      const clientReady = trip.time + minutesToMs(clientReadyBufferMin(trip));
+      const clientReady = trip.time + minutesToMs(clientReadyBufferMin(trip, waitMode));
       add(MRU_AIRPORT, trip.to, clientReady); // main leg
       starts.push({ loc: MRU_AIRPORT, time: trip.time }); // deadhead target: reach the airport
       ends.push({ loc: trip.to, time: clientReady }); // driver ends at the drop-off hotel
@@ -572,9 +600,10 @@ export function buildPrefetchPairs(trips: Trip[]): RoutePair[] {
  *  cache, so the planning pass itself runs on complete, reviewable data. */
 export async function prefetchRouteTimes(
   trips: Trip[],
-  onProgress?: (done: number, total: number) => void
+  onProgress?: (done: number, total: number) => void,
+  waitMode: WaitMode = "byId"
 ): Promise<void> {
-  const queue = buildPrefetchPairs(trips);
+  const queue = buildPrefetchPairs(trips, waitMode);
   const total = queue.length;
   if (total === 0) return;
   let done = 0;
@@ -610,7 +639,8 @@ export async function autoAssign(
   clientPreferences: Record<string, string> = {},
   /** Called after each placement so the UI can show a progress bar.
    *  `total` includes one extra step for the final rescue pass. */
-  onProgress?: (done: number, total: number) => void
+  onProgress?: (done: number, total: number) => void,
+  waitMode: WaitMode = "byId"
 ): Promise<Record<string, Assignment>> {
   const orderedTrips = [...trips].sort((a, b) => a.time - b.time);
   const progressTotal = orderedTrips.length + 1; // +1 for the rescue pass
@@ -633,7 +663,7 @@ export async function autoAssign(
     if (prior?.manualOverride && prior.driverId) {
       const pinnedDriver = driversById.get(prior.driverId);
       if (pinnedDriver) {
-        assignments[trip.id] = await assignLocked(trip, pinnedDriver, states, dayStart, true);
+        assignments[trip.id] = await assignLocked(trip, pinnedDriver, states, dayStart, true, waitMode);
         return;
       }
     }
@@ -649,7 +679,7 @@ export async function autoAssign(
         );
         return;
       }
-      assignments[trip.id] = await assignLocked(trip, requested, states, dayStart, false);
+      assignments[trip.id] = await assignLocked(trip, requested, states, dayStart, false, waitMode);
       return;
     }
 
@@ -664,7 +694,7 @@ export async function autoAssign(
         );
         return;
       }
-      assignments[trip.id] = await assignLocked(trip, preset, states, dayStart, false);
+      assignments[trip.id] = await assignLocked(trip, preset, states, dayStart, false, waitMode);
       return;
     }
 
@@ -672,7 +702,7 @@ export async function autoAssign(
     const results = await Promise.all(
       drivers.map(async (driver) => ({
         driver,
-        feas: await checkFeasibility(trip, states.get(driver.id)!, dayStart),
+        feas: await checkFeasibility(trip, states.get(driver.id)!, dayStart, waitMode),
       }))
     );
     const feasible = results.filter((r) => r.feas.feasible);
@@ -684,7 +714,7 @@ export async function autoAssign(
         (r) => normalizeDriverName(r.driver.name) === normalizeDriverName(preferredName)
       );
       if (preferred) {
-        applyAssignment(states.get(preferred.driver.id)!, trip, preferred.feas);
+        applyAssignment(states.get(preferred.driver.id)!, trip, preferred.feas, waitMode);
         assignments[trip.id] = buildAssignment(trip, preferred.driver, preferred.feas, dayStart);
         return;
       }
@@ -707,7 +737,7 @@ export async function autoAssign(
     }
 
     const best = pickBestDriver(feasible, states);
-    applyAssignment(states.get(best.driver.id)!, trip, best.feas);
+    applyAssignment(states.get(best.driver.id)!, trip, best.feas, waitMode);
     const assignment = buildAssignment(trip, best.driver, best.feas, dayStart);
     if (preferredName) {
       // A remembered preference existed but that driver couldn't take this trip
@@ -723,7 +753,7 @@ export async function autoAssign(
 
   // The greedy sweep is myopic: an early comfortable assignment can make a later
   // trip impossible for everyone. Try single-move reshuffles to cover the leftovers.
-  await rescueUnassigned(drivers, orderedTrips, assignments, dayStart);
+  await rescueUnassigned(drivers, orderedTrips, assignments, dayStart, waitMode);
   reportProgress();
 
   return assignments;
@@ -737,7 +767,8 @@ export async function autoAssign(
 export async function recomputeDriverLane(
   driver: Driver,
   driverTrips: Trip[],
-  existingAssignments: Record<string, Assignment>
+  existingAssignments: Record<string, Assignment>,
+  waitMode: WaitMode = "byId"
 ): Promise<Record<string, Assignment>> {
   const ordered = [...driverTrips].sort((a, b) => a.time - b.time);
   const dayStart = ordered.length > 0 ? startOfDay(ordered[0].time) : startOfDay(Date.now());
@@ -753,7 +784,7 @@ export async function recomputeDriverLane(
   const updated: Record<string, Assignment> = { ...existingAssignments };
 
   for (const trip of ordered) {
-    const feas = await checkFeasibility(trip, state, dayStart);
+    const feas = await checkFeasibility(trip, state, dayStart, waitMode);
     const prior = existingAssignments[trip.id];
     const manualOverride = prior?.manualOverride ?? false;
 
@@ -769,11 +800,11 @@ export async function recomputeDriverLane(
       };
       // Still advance state using the (infeasible) completion time so downstream
       // trips in this lane reflect the driver actually being there, dispatcher-visible.
-      applyAssignment(state, trip, feas);
+      applyAssignment(state, trip, feas, waitMode);
       continue;
     }
 
-    applyAssignment(state, trip, feas);
+    applyAssignment(state, trip, feas, waitMode);
     updated[trip.id] = { ...buildAssignment(trip, driver, feas, dayStart), manualOverride };
   }
 
