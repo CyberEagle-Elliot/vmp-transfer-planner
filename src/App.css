@@ -60,7 +60,7 @@
 
 .driver-row {
   display: grid;
-  grid-template-columns: 1fr 110px 110px auto;
+  grid-template-columns: 1fr 105px 105px 105px auto;
   gap: 0.6rem;
   align-items: end;
   padding: 0.6rem 0;
@@ -124,6 +124,82 @@
   display: flex;
   gap: 0.6rem;
   flex-wrap: wrap;
+}
+
+/* Travel-times editor */
+.travel-panel {
+  margin-bottom: 1rem;
+}
+
+.travel-panel-toggle {
+  font-weight: 700;
+}
+
+.travel-panel-body {
+  border: 2px solid var(--ink);
+  padding: 1rem;
+  margin-top: 0.6rem;
+  background: var(--paper);
+}
+
+.travel-panel-hint {
+  font-size: 0.82rem;
+  color: var(--muted);
+  margin-bottom: 0.75rem;
+}
+
+.travel-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.travel-table th,
+.travel-table td {
+  text-align: left;
+  padding: 0.4rem 0.6rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.travel-table th {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.travel-table td input {
+  width: 80px;
+  min-height: 36px;
+  font-size: 0.85rem;
+  padding: 0.3em 0.4em;
+  font-variant-numeric: tabular-nums;
+}
+
+.route-source {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.route-source-live {
+  color: var(--accent-green-fg);
+}
+
+.route-source-estimated {
+  color: var(--accent-yellow-fg);
+}
+
+.route-source-manual {
+  color: var(--ink);
+}
+
+.route-reset {
+  min-height: 32px;
+  padding: 0.2em 0.6em;
+  font-size: 0.75rem;
 }
 
 /* Dispatch board */
@@ -306,6 +382,9 @@
   }
   .driver-row .remove-btn {
     grid-column: span 2;
+  }
+  .travel-panel-body {
+    overflow-x: auto;
   }
   .lane {
     flex-basis: 86vw;

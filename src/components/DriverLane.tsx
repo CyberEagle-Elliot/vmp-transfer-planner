@@ -26,6 +26,8 @@ export default function DriverLane({
           minutesToTimeString(driver.shiftEnd) || "24:00"
         }`
       : "No shift restriction";
+  const priorityLabel =
+    driver.priority === 1 ? " · High priority" : driver.priority === 3 ? " · Low priority" : "";
 
   return (
     <div className="lane">
@@ -33,6 +35,7 @@ export default function DriverLane({
         <h3>{driver.name}</h3>
         <div className="lane-meta">
           {shiftLabel} · {trips.length} trip{trips.length === 1 ? "" : "s"}
+          {priorityLabel}
         </div>
         <ExportWhatsAppButton driver={driver} trips={allTrips} assignments={assignments} />
       </div>

@@ -1,9 +1,17 @@
-import type { DistanceCacheEntry, DistanceMatrixResult } from "../types";
+import type { DistanceCacheEntry, DistanceMatrixResult, TravelOverride } from "../types";
 import { fetchDistanceMatrix, isGoogleMapsConfigured } from "./googleMapsClient";
-import { loadDistanceCache, saveDistanceCache } from "./storage";
+import {
+  loadDistanceCache,
+  saveDistanceCache,
+  loadTravelOverrides,
+  saveTravelOverrides,
+} from "./storage";
 
 // In-memory cache mirrors localStorage for fast lookups within the session.
 let memoryCache: Record<string, DistanceCacheEntry> = loadDistanceCache();
+// Dispatcher-corrected travel times, keyed "origin|destination" (normalized).
+// They beat the live API and the static fallback for every hour of the day.
+let manualOverrides: Record<string, TravelOverride> = loadTravelOverrides();
 
 const CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours — traffic patterns for a given hour-of-day are reused within a day
 
@@ -20,6 +28,10 @@ function normalizeLocation(loc: string): string {
 function cacheKey(origin: string, destination: string, departureTime: Date): string {
   const hour = departureTime.getHours();
   return `${normalizeLocation(origin)}|${normalizeLocation(destination)}|h${hour}`;
+}
+
+function routeKey(origin: string, destination: string): string {
+  return `${normalizeLocation(origin)}|${normalizeLocation(destination)}`;
 }
 
 function persistCache(): void {
@@ -46,47 +58,116 @@ export async function getTravelTime(
     return { durationMinutes: 5, estimated: false };
   }
 
+  // A dispatcher correction for this route always wins
+  const override = manualOverrides[routeKey(trimmedOrigin, trimmedDestination)];
+  if (override) {
+    return { durationMinutes: override.durationMinutes, estimated: false };
+  }
+
   const key = cacheKey(trimmedOrigin, trimmedDestination, departureTime);
   const cached = memoryCache[key];
   if (cached && Date.now() - cached.cachedAt < CACHE_TTL_MS) {
     return { durationMinutes: cached.durationMinutes, estimated: cached.estimated };
   }
 
-  if (!isGoogleMapsConfigured()) {
-    const result: DistanceMatrixResult = {
-      durationMinutes: STATIC_FALLBACK_MINUTES,
-      estimated: true,
+  const writeCache = (result: DistanceMatrixResult): DistanceMatrixResult => {
+    memoryCache[key] = {
+      ...result,
+      cachedAt: Date.now(),
+      origin: trimmedOrigin,
+      destination: trimmedDestination,
     };
-    memoryCache[key] = { ...result, cachedAt: Date.now() };
     persistCache();
     return result;
+  };
+
+  if (!isGoogleMapsConfigured()) {
+    return writeCache({ durationMinutes: STATIC_FALLBACK_MINUTES, estimated: true });
   }
 
   try {
     const raw = await fetchDistanceMatrix(trimmedOrigin, trimmedDestination, departureTime);
-    let result: DistanceMatrixResult;
     if (raw.statusOk && (raw.durationInTrafficMinutes ?? raw.durationMinutes) != null) {
-      result = {
+      return writeCache({
         durationMinutes: Math.round(
           (raw.durationInTrafficMinutes ?? raw.durationMinutes) as number
         ),
         estimated: false,
-      };
-    } else {
-      result = { durationMinutes: STATIC_FALLBACK_MINUTES, estimated: true };
+      });
     }
-    memoryCache[key] = { ...result, cachedAt: Date.now() };
-    persistCache();
-    return result;
+    return writeCache({ durationMinutes: STATIC_FALLBACK_MINUTES, estimated: true });
   } catch {
-    const result: DistanceMatrixResult = {
-      durationMinutes: STATIC_FALLBACK_MINUTES,
-      estimated: true,
-    };
-    memoryCache[key] = { ...result, cachedAt: Date.now() };
-    persistCache();
-    return result;
+    return writeCache({ durationMinutes: STATIC_FALLBACK_MINUTES, estimated: true });
   }
+}
+
+export type RouteSource = "manual" | "live" | "estimated";
+
+export interface KnownRoute {
+  key: string; // normalized "origin|destination"
+  origin: string;
+  destination: string;
+  durationMinutes: number;
+  source: RouteSource;
+}
+
+/** All routes the planner knows about — dispatcher overrides plus every cached
+ *  lookup (deduped per origin→destination; the freshest cache entry wins). Feeds
+ *  the travel-times editor on the dispatch board. */
+export function listKnownRoutes(): KnownRoute[] {
+  const routes = new Map<string, KnownRoute>();
+
+  const freshest = new Map<string, DistanceCacheEntry>();
+  for (const [key, entry] of Object.entries(memoryCache)) {
+    const rKey = key.split("|").slice(0, 2).join("|");
+    const existing = freshest.get(rKey);
+    if (!existing || entry.cachedAt > existing.cachedAt) freshest.set(rKey, entry);
+  }
+  for (const [rKey, entry] of freshest) {
+    const [normOrigin, normDest] = rKey.split("|");
+    routes.set(rKey, {
+      key: rKey,
+      origin: entry.origin ?? normOrigin,
+      destination: entry.destination ?? normDest,
+      durationMinutes: entry.durationMinutes,
+      source: entry.estimated ? "estimated" : "live",
+    });
+  }
+
+  for (const [rKey, override] of Object.entries(manualOverrides)) {
+    routes.set(rKey, {
+      key: rKey,
+      origin: override.origin,
+      destination: override.destination,
+      durationMinutes: override.durationMinutes,
+      source: "manual",
+    });
+  }
+
+  return [...routes.values()].sort(
+    (a, b) => a.origin.localeCompare(b.origin) || a.destination.localeCompare(b.destination)
+  );
+}
+
+/** Records a dispatcher correction for a route's travel time. */
+export function setTravelOverride(origin: string, destination: string, minutes: number): void {
+  const safe = Math.max(1, Math.round(minutes));
+  manualOverrides[routeKey(origin, destination)] = {
+    origin: origin.trim(),
+    destination: destination.trim(),
+    durationMinutes: safe,
+  };
+  saveTravelOverrides(manualOverrides);
+}
+
+/** Removes a correction so the route goes back to live/estimated lookups. */
+export function clearTravelOverride(key: string): void {
+  delete manualOverrides[key];
+  saveTravelOverrides(manualOverrides);
+}
+
+export function getTravelOverrides(): Record<string, TravelOverride> {
+  return { ...manualOverrides };
 }
 
 export function clearDistanceCache(): void {

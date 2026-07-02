@@ -302,10 +302,16 @@ function unassignedAssignment(trip: Trip, reason: string): Assignment {
   };
 }
 
-/** Picks the winner among feasible drivers. Drivers with comfortable slack are
- *  preferred by least deadhead (travel to the pickup), tie-broken by fewest trips
- *  so the workload spreads across the fleet, then by slack. If nobody is
- *  comfortable, the largest slack wins — the safest hands for a tight connection. */
+/** Picks the winner among feasible drivers.
+ *
+ *  Comfortable drivers (slack ≥ 30 min) compete on, in order:
+ *    1. priority       — high-priority drivers get trips first
+ *    2. fewest trips   — distributes the day evenly within a priority tier
+ *    3. least deadhead — whoever is already closest to the pickup
+ *    4. largest slack
+ *
+ *  If nobody is comfortable the trip is tight, and safety beats preference:
+ *  the largest slack wins, with priority only breaking exact ties. */
 function pickBestDriver(
   candidates: { driver: Driver; feas: FeasibilityResult }[],
   states: Map<string, DriverRunState>
@@ -314,27 +320,66 @@ function pickBestDriver(
     (c) => c.feas.routingSlackMinutes >= COMFORTABLE_SLACK_MIN
   );
   if (comfortable.length === 0) {
-    return candidates.reduce((best, c) =>
-      c.feas.routingSlackMinutes > best.feas.routingSlackMinutes ? c : best
-    );
+    return candidates.reduce((best, c) => {
+      if (c.feas.routingSlackMinutes !== best.feas.routingSlackMinutes) {
+        return c.feas.routingSlackMinutes > best.feas.routingSlackMinutes ? c : best;
+      }
+      return c.driver.priority < best.driver.priority ? c : best;
+    });
   }
   return comfortable.reduce((best, c) => {
-    if (c.feas.travelToStartMinutes !== best.feas.travelToStartMinutes) {
-      return c.feas.travelToStartMinutes < best.feas.travelToStartMinutes ? c : best;
+    if (c.driver.priority !== best.driver.priority) {
+      return c.driver.priority < best.driver.priority ? c : best;
     }
     const cCount = states.get(c.driver.id)!.tripCount;
     const bestCount = states.get(best.driver.id)!.tripCount;
     if (cCount !== bestCount) return cCount < bestCount ? c : best;
+    if (c.feas.travelToStartMinutes !== best.feas.travelToStartMinutes) {
+      return c.feas.travelToStartMinutes < best.feas.travelToStartMinutes ? c : best;
+    }
     return c.feas.routingSlackMinutes > best.feas.routingSlackMinutes ? c : best;
   });
 }
 
+/** Assigns a trip to a specific driver no matter what (sheet preset or pinned manual
+ *  override), advancing the driver's timeline and flagging infeasibility as a warning. */
+async function assignLocked(
+  trip: Trip,
+  driver: Driver,
+  states: Map<string, DriverRunState>,
+  dayStart: number,
+  manualOverride: boolean
+): Promise<Assignment> {
+  const state = states.get(driver.id)!;
+  const feas = await checkFeasibility(trip, state, dayStart);
+  applyAssignment(state, trip, feas);
+  if (feas.feasible) {
+    return { ...buildAssignment(trip, driver, feas, dayStart), manualOverride };
+  }
+  return {
+    tripId: trip.id,
+    driverId: driver.id,
+    slackMinutes: null,
+    color: "red",
+    reason: feas.reason ?? `Not feasible for ${driver.name}`,
+    estimated: feas.estimated,
+    manualOverride,
+  };
+}
+
 /** Runs the full auto-assign algorithm from scratch over all trips, in chronological order.
- *  Trips with a Driver name already on the sheet are locked to that driver (assigned even
- *  if tight/infeasible, with a visible warning) before the auto pool is considered. */
+ *
+ *  Locked trips are honored before the auto pool is considered (assigned even if
+ *  tight/infeasible, with a visible warning):
+ *    1. trips the dispatcher manually placed (`manualOverride` in `existingAssignments`)
+ *    2. trips with a Driver name already on the sheet
+ *
+ *  Pass the current assignments when re-planning (after a travel-time correction,
+ *  roster change, etc.) so manual decisions survive the re-run. */
 export async function autoAssign(
   drivers: Driver[],
-  trips: Trip[]
+  trips: Trip[],
+  existingAssignments: Record<string, Assignment> = {}
 ): Promise<Record<string, Assignment>> {
   const orderedTrips = [...trips].sort((a, b) => a.time - b.time);
   const dayStart = orderedTrips.length > 0 ? startOfDay(orderedTrips[0].time) : startOfDay(Date.now());
@@ -342,11 +387,23 @@ export async function autoAssign(
   const assignments: Record<string, Assignment> = {};
 
   const driversByName = new Map<string, Driver>();
+  const driversById = new Map<string, Driver>();
   for (const driver of drivers) {
     driversByName.set(normalizeDriverName(driver.name), driver);
+    driversById.set(driver.id, driver);
   }
 
   for (const trip of orderedTrips) {
+    // Manual placement by the dispatcher is pinned across re-runs
+    const prior = existingAssignments[trip.id];
+    if (prior?.manualOverride && prior.driverId) {
+      const pinnedDriver = driversById.get(prior.driverId);
+      if (pinnedDriver) {
+        assignments[trip.id] = await assignLocked(trip, pinnedDriver, states, dayStart, true);
+        continue;
+      }
+    }
+
     // Preset driver from the sheet wins over the auto pool
     const presetName = trip.presetDriverName.trim();
     if (presetName) {
@@ -358,22 +415,7 @@ export async function autoAssign(
         );
         continue;
       }
-      const state = states.get(preset.id)!;
-      const feas = await checkFeasibility(trip, state, dayStart);
-      applyAssignment(state, trip, feas);
-      if (feas.feasible) {
-        assignments[trip.id] = buildAssignment(trip, preset, feas, dayStart);
-      } else {
-        assignments[trip.id] = {
-          tripId: trip.id,
-          driverId: preset.id,
-          slackMinutes: null,
-          color: "red",
-          reason: feas.reason ?? `Not feasible for ${preset.name} (preset on sheet)`,
-          estimated: feas.estimated,
-          manualOverride: false,
-        };
-      }
+      assignments[trip.id] = await assignLocked(trip, preset, states, dayStart, false);
       continue;
     }
 

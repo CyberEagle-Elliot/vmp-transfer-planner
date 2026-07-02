@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { Driver } from "../types";
+import type { Driver, DriverPriority } from "../types";
 import { minutesToTimeString, timeStringToMinutes } from "../lib/format";
 
 interface Props {
@@ -15,6 +15,7 @@ function makeDriver(index: number): Driver {
     name: "",
     shiftStart: null,
     shiftEnd: null,
+    priority: 2,
   };
 }
 
@@ -126,6 +127,22 @@ export default function DriverRosterForm({
                     updateDriver(driver.id, { shiftEnd: timeStringToMinutes(e.target.value) })
                   }
                 />
+              </div>
+              <div>
+                <label htmlFor={`priority-${driver.id}`}>Priority</label>
+                <select
+                  id={`priority-${driver.id}`}
+                  value={driver.priority}
+                  onChange={(e) =>
+                    updateDriver(driver.id, {
+                      priority: parseInt(e.target.value, 10) as DriverPriority,
+                    })
+                  }
+                >
+                  <option value={1}>High</option>
+                  <option value={2}>Normal</option>
+                  <option value={3}>Low</option>
+                </select>
               </div>
               <button
                 type="button"

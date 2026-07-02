@@ -2,6 +2,9 @@
 
 export type TripType = "arrival" | "departure" | "tour" | "unknown";
 
+/** 1 = high (gets trips first), 2 = normal, 3 = low (backup) */
+export type DriverPriority = 1 | 2 | 3;
+
 export interface Driver {
   id: string;
   name: string;
@@ -9,6 +12,7 @@ export interface Driver {
   shiftStart: number | null;
   /** Minutes since midnight, or null for no restriction */
   shiftEnd: number | null;
+  priority: DriverPriority;
 }
 
 /** Raw row as parsed from the spreadsheet, before assignment */
@@ -73,6 +77,17 @@ export interface DistanceMatrixResult {
 
 export interface DistanceCacheEntry extends DistanceMatrixResult {
   cachedAt: number;
+  /** Original (un-normalized) endpoints, kept for display in the travel-times editor */
+  origin?: string;
+  destination?: string;
+}
+
+/** A dispatcher-corrected travel time for a route, in minutes. Overrides both the
+ *  live API and the static fallback for every hour of the day. */
+export interface TravelOverride {
+  origin: string;
+  destination: string;
+  durationMinutes: number;
 }
 
 export interface AppState {
@@ -80,4 +95,5 @@ export interface AppState {
   trips: Trip[];
   assignments: Record<string, Assignment>; // tripId -> Assignment
   distanceCache: Record<string, DistanceCacheEntry>; // key -> entry
+  travelOverrides: Record<string, TravelOverride>; // "origin|destination" (normalized) -> override
 }

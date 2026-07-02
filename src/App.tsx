@@ -12,6 +12,7 @@ import {
 import { isGoogleMapsConfigured } from "./lib/googleMapsClient";
 import SetupScreen from "./components/SetupScreen";
 import DispatchBoard from "./components/DispatchBoard";
+import TravelTimesPanel from "./components/TravelTimesPanel";
 import "./App.css";
 
 type View = "setup" | "board";
@@ -56,11 +57,13 @@ export default function App() {
     }
   }
 
+  // Re-plans the whole day but keeps the dispatcher's manual placements pinned.
+  // Used by the re-run button and after travel-time corrections.
   async function handleRerun() {
     if (trips.length === 0) return;
     setIsAssigning(true);
     try {
-      const result = await autoAssign(roster, trips);
+      const result = await autoAssign(roster, trips, assignments);
       setAssignments(result);
     } finally {
       setIsAssigning(false);
@@ -158,12 +161,15 @@ export default function App() {
           isAssigning={isAssigning}
         />
       ) : (
-        <DispatchBoard
-          drivers={roster}
-          trips={trips}
-          assignments={assignments}
-          onReassign={handleReassign}
-        />
+        <>
+          <TravelTimesPanel onOverridesApplied={handleRerun} isAssigning={isAssigning} />
+          <DispatchBoard
+            drivers={roster}
+            trips={trips}
+            assignments={assignments}
+            onReassign={handleReassign}
+          />
+        </>
       )}
     </div>
   );

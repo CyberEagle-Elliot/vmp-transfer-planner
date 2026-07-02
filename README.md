@@ -114,13 +114,19 @@ still assigned to that driver, flagged red with a warning; if the name
 isn't in the roster the trip lands in the unassigned lane with a clear
 reason.
 
-Among feasible drivers, drivers with a **comfortable margin** (≥ 30 min
-slack) are preferred by **least deadhead** — whoever is already closest to
-the pickup — tie-broken by fewest trips so far so workload spreads across
-the fleet. If nobody has a comfortable margin, the trip goes to the driver
-with the **largest slack** (the safest hands for a tight connection). If no
-driver is feasible, the trip is marked **UNASSIGNED** with the closest
-miss's reason shown — the app never double-books.
+Each driver has a **priority** (High / Normal / Low, set in the roster).
+Among feasible drivers with a **comfortable margin** (≥ 30 min slack) the
+trip goes to, in order: the highest-priority driver, then whoever has the
+**fewest trips so far** (so the day spreads evenly within a priority tier),
+then whoever is **closest to the pickup** (least deadhead). If nobody has a
+comfortable margin, safety beats preference: the trip goes to the driver
+with the **largest slack**. If no driver is feasible, the trip is marked
+**UNASSIGNED** with the closest miss's reason shown — the app never
+double-books.
+
+**Re-running keeps your decisions.** "Re-run auto-assign" (and the re-plan
+after a travel-time correction) pins every trip you placed manually via the
+Reassign dropdown, and re-optimizes only the rest of the day around them.
 
 Margin badges use the stricter of the routing slack and the headroom
 before a shift end: green > 30 min, yellow 10–30 min, red < 10 min (or
@@ -129,6 +135,17 @@ unassigned / shift-violating).
 Manual reassignment (the dropdown on each trip card) overrides the
 algorithm and immediately recalculates slack/colors for both the old and
 new driver's lanes, without re-solving the rest of the day.
+
+## Correcting travel times
+
+The **Travel times** panel at the top of the dispatch board lists every
+route the planner has used today, with its source: *Live traffic*,
+*Estimated* (static fallback), or *Corrected* (yours). If a duration looks
+wrong — the API is optimistic about a mountain road, or the fallback
+estimate is way off — type the real minutes and hit **Apply & re-plan**.
+The whole day is re-planned with your corrected times (manual placements
+stay pinned), and the correction is remembered for future days until you
+reset it. Corrections beat the live API for every hour of the day.
 
 ## Travel-time caching
 
