@@ -1,6 +1,6 @@
 import type { DistanceCacheEntry, DistanceMatrixResult, TravelOverride } from "../types";
 import { fetchDistanceMatrix, isGoogleMapsConfigured, reportLiveLookupOk } from "./googleMapsClient";
-import { estimateTravelMinutes } from "./mauritiusEstimator";
+import { estimateTravelMinutes, findRegion } from "./mauritiusEstimator";
 import {
   loadDistanceCache,
   saveDistanceCache,
@@ -14,7 +14,10 @@ let memoryCache: Record<string, DistanceCacheEntry> = loadDistanceCache();
 // They beat the live API and the static fallback for every hour of the day.
 let manualOverrides: Record<string, TravelOverride> = loadTravelOverrides();
 
-const CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours — traffic patterns for a given hour-of-day are reused within a day
+/** Route-library lifetime. Mauritius routes don't change much month to month,
+ *  and the library is what keeps the planner light on the Google API: known
+ *  routes are served from here, only unknown ones are fetched live. */
+const CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 /** Last-resort flat fallback (minutes), used only when neither the live API nor
  *  the Mauritius region estimator can resolve a route. Deliberately conservative. */
@@ -49,9 +52,18 @@ function normalizeLocation(loc: string): string {
   return loc.trim().toLowerCase().replace(/\s+/g, " ");
 }
 
-function cacheKey(origin: string, destination: string, departureTime: Date): string {
+/** Traffic band: Mauritius has pronounced morning and evening peaks; within a
+ *  band, drive times are similar enough to reuse. Three bands per route keeps
+ *  the library small and the Google bill low. */
+function timeBand(departureTime: Date): string {
   const hour = departureTime.getHours();
-  return `${normalizeLocation(origin)}|${normalizeLocation(destination)}|h${hour}`;
+  if (hour >= 7 && hour < 10) return "am";
+  if (hour >= 15 && hour < 19) return "pm";
+  return "off";
+}
+
+function cacheKey(origin: string, destination: string, departureTime: Date): string {
+  return `${normalizeLocation(origin)}|${normalizeLocation(destination)}|${timeBand(departureTime)}`;
 }
 
 function routeKey(origin: string, destination: string): string {
@@ -61,6 +73,24 @@ function routeKey(origin: string, destination: string): string {
 function persistCache(): void {
   saveDistanceCache(memoryCache);
 }
+
+// One-time migration: entries saved before the route library used per-hour keys
+// ("...|h14"). Fold them into their traffic band, keeping the freshest per band.
+(function migrateHourKeys() {
+  let changed = false;
+  for (const [key, entry] of Object.entries(memoryCache)) {
+    const match = key.match(/^(.+)\|h(\d{1,2})$/);
+    if (!match) continue;
+    const bandDate = new Date();
+    bandDate.setHours(parseInt(match[2], 10), 0, 0, 0);
+    const newKey = `${match[1]}|${timeBand(bandDate)}`;
+    const existing = memoryCache[newKey];
+    if (!existing || entry.cachedAt > existing.cachedAt) memoryCache[newKey] = entry;
+    delete memoryCache[key];
+    changed = true;
+  }
+  if (changed) persistCache();
+})();
 
 /** Resolves the travel time (minutes) between two full address strings, using the
  *  Google Maps Distance Matrix (traffic-aware) with an in-memory + localStorage cache
@@ -114,25 +144,41 @@ export async function getTravelTime(
     return writeCache(fallbackEstimate(trimmedOrigin, trimmedDestination));
   }
 
-  try {
-    // Google rejects departure_time in the past (e.g. re-planning a day already
-    // under way) — query "now" instead; current traffic is the best proxy anyway.
-    const effectiveDeparture =
-      departureTime.getTime() < Date.now() ? new Date() : departureTime;
+  // Google rejects departure_time in the past (e.g. re-planning a day already
+  // under way) — query "now" instead; current traffic is the best proxy anyway.
+  const effectiveDeparture = departureTime.getTime() < Date.now() ? new Date() : departureTime;
+
+  const attemptLive = async (o: string, d: string): Promise<DistanceMatrixResult | null> => {
     const raw = await withTimeout(
-      fetchDistanceMatrix(trimmedOrigin, trimmedDestination, effectiveDeparture),
+      fetchDistanceMatrix(o, d, effectiveDeparture),
       LIVE_LOOKUP_TIMEOUT_MS
     );
     if (raw.statusOk && (raw.durationInTrafficMinutes ?? raw.durationMinutes) != null) {
       reportLiveLookupOk();
-      return writeCache({
+      return {
         durationMinutes: Math.round(
           (raw.durationInTrafficMinutes ?? raw.durationMinutes) as number
         ),
         estimated: false,
-      });
+      };
     }
-    return writeCache(fallbackEstimate(trimmedOrigin, trimmedDestination));
+    return null;
+  };
+
+  try {
+    let result = await attemptLive(trimmedOrigin, trimmedDestination);
+    if (!result) {
+      // The exact address wouldn't geocode — retry at village level. Still real
+      // live traffic, just measured to the locality instead of the gate.
+      const originRegion = findRegion(trimmedOrigin);
+      const destRegion = findRegion(trimmedDestination);
+      const villageOrigin = originRegion ? `${originRegion.name}, Mauritius` : trimmedOrigin;
+      const villageDest = destRegion ? `${destRegion.name}, Mauritius` : trimmedDestination;
+      if (villageOrigin !== trimmedOrigin || villageDest !== trimmedDestination) {
+        result = await attemptLive(villageOrigin, villageDest);
+      }
+    }
+    return writeCache(result ?? fallbackEstimate(trimmedOrigin, trimmedDestination));
   } catch {
     return writeCache(fallbackEstimate(trimmedOrigin, trimmedDestination));
   }

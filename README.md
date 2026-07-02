@@ -184,14 +184,25 @@ The whole day is re-planned with your corrected times (manual placements
 stay pinned), and the correction is remembered for future days until you
 reset it. Corrections beat the live API for every hour of the day.
 
-## Travel-time caching
+## The route library
 
 Every origin→destination lookup passes `departure_time` so
-`duration_in_traffic` is used. Results are cached in memory and in
-`localStorage`, keyed by origin + destination + hour-of-day, since the same
-airport↔hotel pairs repeat many times a day. Cached fallback estimates are
+`duration_in_traffic` is used. Results are stored in a persistent **route
+library** (`localStorage`), keyed by origin + destination + **traffic band**
+(morning peak 07–10, evening peak 15–19, off-peak), and kept for 30 days.
+
+The library grows dynamically with use: each planning run first checks
+which routes of the day it already knows and fetches **only the missing
+ones** live. After a few days of normal use the fleet's whole
+hotel↔hotel / MRU↔hotel network is known, and planning costs almost
+nothing on the Google API while staying traffic-aware per band.
+
+**Village-level live fallback**: when an exact address won't geocode, the
+lookup retries with the locality names it recognizes in the addresses
+("Trou aux Biches, Mauritius" → "Grand Baie, Mauritius") — still real live
+traffic, just measured between villages. Cached fallback estimates are
 ignored as soon as live lookups are possible again, so a temporary API
-failure can't lock in wrong times for the day.
+failure can't lock in wrong times.
 
 **No API key / lookup failed**: instead of one flat estimate for the whole
 island, the app recognizes the locality in each address (Grand Baie,
