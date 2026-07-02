@@ -1,7 +1,12 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 import type { Assignment, Driver, ParsedTripRow, Trip } from "./types";
 import { classifyTrips } from "./lib/parser";
-import { autoAssign, recomputeDriverLane, normalizeClientId } from "./lib/assignment";
+import {
+  autoAssign,
+  prefetchRouteTimes,
+  recomputeDriverLane,
+  normalizeClientId,
+} from "./lib/assignment";
 import {
   loadAppState,
   saveRoster,
@@ -32,9 +37,11 @@ export default function App() {
   );
   const [view, setView] = useState<View>(initial.trips.length > 0 ? "board" : "setup");
   const [isAssigning, setIsAssigning] = useState(false);
-  const [assignProgress, setAssignProgress] = useState<{ done: number; total: number } | null>(
-    null
-  );
+  const [assignProgress, setAssignProgress] = useState<{
+    done: number;
+    total: number;
+    label: string;
+  } | null>(null);
 
   useEffect(() => {
     // Startup self-test: fire one route lookup so the header immediately shows
@@ -68,14 +75,28 @@ export default function App() {
     setRoster(drivers);
   }
 
+  // Phase 1: fetch every drive time the day could need (MRU→hotel, hotel→MRU,
+  // hotel→hotel chains). Phase 2: plan on top of that complete data.
+  async function runPlanning(
+    drivers: Driver[],
+    dayTrips: Trip[],
+    existing: Record<string, Assignment>
+  ): Promise<Record<string, Assignment>> {
+    setAssignProgress({ done: 0, total: 1, label: "Checking drive times" });
+    await prefetchRouteTimes(dayTrips, (done, total) =>
+      setAssignProgress({ done, total, label: "Checking drive times" })
+    );
+    setAssignProgress({ done: 0, total: dayTrips.length + 1, label: "Planning" });
+    return autoAssign(drivers, dayTrips, existing, clientPreferences, (done, total) =>
+      setAssignProgress({ done, total, label: "Planning" })
+    );
+  }
+
   async function handleAutoAssign(drivers: Driver[], rows: ParsedTripRow[]) {
     setIsAssigning(true);
     const { trips: classified } = classifyTrips(rows.filter((r) => !r.parseError));
-    setAssignProgress({ done: 0, total: classified.length + 1 });
     try {
-      const result = await autoAssign(drivers, classified, {}, clientPreferences, (done, total) =>
-        setAssignProgress({ done, total })
-      );
+      const result = await runPlanning(drivers, classified, {});
       setTrips(classified);
       setAssignments(result);
       setView("board");
@@ -90,11 +111,8 @@ export default function App() {
   async function handleRerun() {
     if (trips.length === 0) return;
     setIsAssigning(true);
-    setAssignProgress({ done: 0, total: trips.length + 1 });
     try {
-      const result = await autoAssign(roster, trips, assignments, clientPreferences, (done, total) =>
-        setAssignProgress({ done, total })
-      );
+      const result = await runPlanning(roster, trips, assignments);
       setAssignments(result);
     } finally {
       setIsAssigning(false);
@@ -223,8 +241,8 @@ export default function App() {
             style={{ width: `${Math.round((assignProgress.done / assignProgress.total) * 100)}%` }}
           />
           <span className="assign-progress-label">
-            Planning {Math.min(assignProgress.done, assignProgress.total)}/{assignProgress.total}{" "}
-            — {Math.round((assignProgress.done / assignProgress.total) * 100)}%
+            {assignProgress.label} {Math.min(assignProgress.done, assignProgress.total)}/
+            {assignProgress.total} — {Math.round((assignProgress.done / assignProgress.total) * 100)}%
           </span>
         </div>
       )}

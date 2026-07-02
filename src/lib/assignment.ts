@@ -502,6 +502,84 @@ async function assignLocked(
   };
 }
 
+export interface RoutePair {
+  origin: string;
+  destination: string;
+  departure: Date;
+}
+
+/** Every route the day's plan could need, deduplicated:
+ *  - MRU → hotel for each arrival (departing when the client is ready)
+ *  - hotel → MRU for each departure
+ *  - end-location of any earlier trip → start-location of any later trip
+ *    (the deadhead a driver would drive to chain the two)
+ *  The abstract "base" start location is excluded — it has no real address. */
+export function buildPrefetchPairs(trips: Trip[]): RoutePair[] {
+  const pairs = new Map<string, RoutePair>();
+  const add = (origin: string, destination: string, departAt: number) => {
+    const o = origin.trim();
+    const d = destination.trim();
+    if (!o || !d || o.toLowerCase() === "base" || d.toLowerCase() === "base") return;
+    if (normalizeDriverName(o) === normalizeDriverName(d)) return;
+    const key = `${o.toLowerCase()}|${d.toLowerCase()}|h${new Date(departAt).getHours()}`;
+    if (!pairs.has(key)) pairs.set(key, { origin: o, destination: d, departure: new Date(departAt) });
+  };
+
+  interface Endpoint {
+    loc: string;
+    time: number;
+  }
+  const ends: Endpoint[] = [];
+  const starts: Endpoint[] = [];
+
+  for (const trip of trips) {
+    if (trip.type === "arrival") {
+      const clientReady = trip.time + minutesToMs(CLIENT_READY_BUFFER_MIN);
+      add(MRU_AIRPORT, trip.to, clientReady); // main leg
+      starts.push({ loc: MRU_AIRPORT, time: trip.time }); // deadhead target: reach the airport
+      ends.push({ loc: trip.to, time: clientReady }); // driver ends at the drop-off hotel
+    } else if (trip.type === "departure") {
+      add(trip.from, MRU_AIRPORT, trip.time); // main leg
+      starts.push({ loc: trip.from, time: trip.time }); // deadhead target: reach the pickup hotel
+      ends.push({ loc: MRU_AIRPORT, time: trip.time }); // driver ends at the airport
+    } else if (trip.type === "tour" && trip.tourWindow) {
+      starts.push({ loc: trip.tourWindow.startLocation, time: trip.tourWindow.startTime });
+      ends.push({ loc: trip.tourWindow.endLocation, time: trip.tourWindow.endTime });
+    }
+  }
+
+  for (const end of ends) {
+    for (const start of starts) {
+      if (start.time > end.time) add(end.loc, start.loc, end.time);
+    }
+  }
+
+  return [...pairs.values()];
+}
+
+/** Fetches every drive time the plan could need (see buildPrefetchPairs) before
+ *  planning starts, a few lookups at a time. Results land in the travel-time
+ *  cache, so the planning pass itself runs on complete, reviewable data. */
+export async function prefetchRouteTimes(
+  trips: Trip[],
+  onProgress?: (done: number, total: number) => void
+): Promise<void> {
+  const queue = buildPrefetchPairs(trips);
+  const total = queue.length;
+  if (total === 0) return;
+  let done = 0;
+  const CONCURRENCY = 6;
+  const workers = Array.from({ length: Math.min(CONCURRENCY, total) }, async () => {
+    for (;;) {
+      const pair = queue.shift();
+      if (!pair) return;
+      await getTravelTime(pair.origin, pair.destination, pair.departure);
+      onProgress?.(++done, total);
+    }
+  });
+  await Promise.all(workers);
+}
+
 /** Runs the full auto-assign algorithm from scratch over all trips, in chronological order.
  *
  *  Per trip, in order of authority:

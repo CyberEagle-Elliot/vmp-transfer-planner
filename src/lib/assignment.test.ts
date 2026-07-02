@@ -22,7 +22,7 @@ vi.mock("./distanceMatrix", () => ({
   }),
 }));
 
-import { autoAssign } from "./assignment";
+import { autoAssign, buildPrefetchPairs, MRU_AIRPORT } from "./assignment";
 
 const DAY = new Date(2026, 6, 2, 0, 0, 0, 0).getTime();
 const at = (h: number, m = 0) => DAY + (h * 60 + m) * 60000;
@@ -108,6 +108,25 @@ describe("autoAssign", () => {
     const result = await autoAssign([driver("d1", "Rajesh", 1)], [trip]);
     expect(result["t1"].driverId).toBeNull();
     expect(result["t1"].reason).toContain("Somebody Else");
+  });
+
+  it("prefetch covers MRU→hotel, hotel→MRU, and forward hotel→hotel chains", () => {
+    const arrivalTrip = arrival("t1", at(10), "Hotel A");
+    const departureTrip: Trip = {
+      ...arrival("t2", at(14)),
+      type: "departure",
+      from: "Hotel B",
+      to: "MRU Airport",
+    };
+    const pairs = buildPrefetchPairs([arrivalTrip, departureTrip]);
+    const has = (o: string, d: string) =>
+      pairs.some((p) => p.origin === o && p.destination === d);
+
+    expect(has(MRU_AIRPORT, "Hotel A")).toBe(true); // arrival main leg
+    expect(has("Hotel B", MRU_AIRPORT)).toBe(true); // departure main leg
+    expect(has("Hotel A", "Hotel B")).toBe(true); // deadhead chain (10:00 drop → 14:00 pickup)
+    expect(has("Hotel B", "Hotel A")).toBe(false); // never chains backwards in time
+    expect(pairs.every((p) => p.origin !== "base" && p.destination !== "base")).toBe(true);
   });
 
   it("never double-books: reports a reason when nobody is feasible", async () => {
