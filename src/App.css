@@ -136,6 +136,37 @@
   flex-wrap: wrap;
 }
 
+/* Auto-assign progress bar */
+.assign-progress {
+  position: relative;
+  border: 2px solid var(--ink);
+  height: 34px;
+  margin-bottom: 1rem;
+  background: var(--paper);
+  overflow: hidden;
+}
+
+.assign-progress-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: var(--accent-green-bg);
+  border-right: 2px solid var(--accent-green-line);
+  transition: width 0.15s ease-out;
+}
+
+.assign-progress-label {
+  position: relative;
+  display: flex;
+  align-items: center;
+  height: 100%;
+  padding: 0 0.9rem;
+  font-size: 0.8rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-variant-numeric: tabular-nums;
+}
+
 /* Travel-times editor */
 .travel-panel {
   margin-bottom: 1rem;

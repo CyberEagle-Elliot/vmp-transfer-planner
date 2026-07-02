@@ -125,8 +125,12 @@ export async function getTravelTime(
   }
 
   try {
+    // Google rejects departure_time in the past (e.g. re-planning a day already
+    // under way) — query "now" instead; current traffic is the best proxy anyway.
+    const effectiveDeparture =
+      departureTime.getTime() < Date.now() ? new Date() : departureTime;
     const raw = await withTimeout(
-      fetchDistanceMatrix(trimmedOrigin, trimmedDestination, departureTime),
+      fetchDistanceMatrix(trimmedOrigin, trimmedDestination, effectiveDeparture),
       LIVE_LOOKUP_TIMEOUT_MS
     );
     if (raw.statusOk && (raw.durationInTrafficMinutes ?? raw.durationMinutes) != null) {

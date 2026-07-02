@@ -32,6 +32,9 @@ export default function App() {
   );
   const [view, setView] = useState<View>(initial.trips.length > 0 ? "board" : "setup");
   const [isAssigning, setIsAssigning] = useState(false);
+  const [assignProgress, setAssignProgress] = useState<{ done: number; total: number } | null>(
+    null
+  );
 
   useEffect(() => {
     // Startup self-test: fire one route lookup so the header immediately shows
@@ -67,14 +70,18 @@ export default function App() {
 
   async function handleAutoAssign(drivers: Driver[], rows: ParsedTripRow[]) {
     setIsAssigning(true);
+    const { trips: classified } = classifyTrips(rows.filter((r) => !r.parseError));
+    setAssignProgress({ done: 0, total: classified.length + 1 });
     try {
-      const { trips: classified } = classifyTrips(rows.filter((r) => !r.parseError));
-      const result = await autoAssign(drivers, classified, {}, clientPreferences);
+      const result = await autoAssign(drivers, classified, {}, clientPreferences, (done, total) =>
+        setAssignProgress({ done, total })
+      );
       setTrips(classified);
       setAssignments(result);
       setView("board");
     } finally {
       setIsAssigning(false);
+      setAssignProgress(null);
     }
   }
 
@@ -83,11 +90,15 @@ export default function App() {
   async function handleRerun() {
     if (trips.length === 0) return;
     setIsAssigning(true);
+    setAssignProgress({ done: 0, total: trips.length + 1 });
     try {
-      const result = await autoAssign(roster, trips, assignments, clientPreferences);
+      const result = await autoAssign(roster, trips, assignments, clientPreferences, (done, total) =>
+        setAssignProgress({ done, total })
+      );
       setAssignments(result);
     } finally {
       setIsAssigning(false);
+      setAssignProgress(null);
     }
   }
 
@@ -198,6 +209,25 @@ export default function App() {
           )}
         </div>
       </header>
+
+      {assignProgress && (
+        <div
+          className="assign-progress"
+          role="progressbar"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={Math.round((assignProgress.done / assignProgress.total) * 100)}
+        >
+          <div
+            className="assign-progress-fill"
+            style={{ width: `${Math.round((assignProgress.done / assignProgress.total) * 100)}%` }}
+          />
+          <span className="assign-progress-label">
+            Planning {Math.min(assignProgress.done, assignProgress.total)}/{assignProgress.total}{" "}
+            — {Math.round((assignProgress.done / assignProgress.total) * 100)}%
+          </span>
+        </div>
+      )}
 
       {view === "setup" ? (
         <SetupScreen

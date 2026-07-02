@@ -519,9 +519,15 @@ export async function autoAssign(
   drivers: Driver[],
   trips: Trip[],
   existingAssignments: Record<string, Assignment> = {},
-  clientPreferences: Record<string, string> = {}
+  clientPreferences: Record<string, string> = {},
+  /** Called after each placement so the UI can show a progress bar.
+   *  `total` includes one extra step for the final rescue pass. */
+  onProgress?: (done: number, total: number) => void
 ): Promise<Record<string, Assignment>> {
   const orderedTrips = [...trips].sort((a, b) => a.time - b.time);
+  const progressTotal = orderedTrips.length + 1; // +1 for the rescue pass
+  let progressDone = 0;
+  const reportProgress = () => onProgress?.(++progressDone, progressTotal);
   const dayStart = orderedTrips.length > 0 ? startOfDay(orderedTrips[0].time) : startOfDay(Date.now());
   const states = initDriverStates(drivers, dayStart);
   const assignments: Record<string, Assignment> = {};
@@ -533,14 +539,14 @@ export async function autoAssign(
     driversById.set(driver.id, driver);
   }
 
-  for (const trip of orderedTrips) {
+  const placeTrip = async (trip: Trip): Promise<void> => {
     // Manual placement by the dispatcher is pinned across re-runs
     const prior = existingAssignments[trip.id];
     if (prior?.manualOverride && prior.driverId) {
       const pinnedDriver = driversById.get(prior.driverId);
       if (pinnedDriver) {
         assignments[trip.id] = await assignLocked(trip, pinnedDriver, states, dayStart, true);
-        continue;
+        return;
       }
     }
 
@@ -553,10 +559,10 @@ export async function autoAssign(
           trip,
           `Customer requested "${requestedName}", who is not in the roster`
         );
-        continue;
+        return;
       }
       assignments[trip.id] = await assignLocked(trip, requested, states, dayStart, false);
-      continue;
+      return;
     }
 
     // Preset driver from the sheet wins over the auto pool
@@ -568,10 +574,10 @@ export async function autoAssign(
           trip,
           `Sheet assigns "${presetName}", who is not in the roster`
         );
-        continue;
+        return;
       }
       assignments[trip.id] = await assignLocked(trip, preset, states, dayStart, false);
-      continue;
+      return;
     }
 
     // Check every driver in parallel — feasibility is read-only over states
@@ -592,7 +598,7 @@ export async function autoAssign(
       if (preferred) {
         applyAssignment(states.get(preferred.driver.id)!, trip, preferred.feas);
         assignments[trip.id] = buildAssignment(trip, preferred.driver, preferred.feas, dayStart);
-        continue;
+        return;
       }
     }
 
@@ -609,7 +615,7 @@ export async function autoAssign(
         trip,
         closest?.feas.reason ?? "No driver available"
       );
-      continue;
+      return;
     }
 
     const best = pickBestDriver(feasible, states);
@@ -620,11 +626,17 @@ export async function autoAssign(
       assignment.reason = `Client's regular driver ${preferredName} isn't available for this trip`;
     }
     assignments[trip.id] = assignment;
+  };
+
+  for (const trip of orderedTrips) {
+    await placeTrip(trip);
+    reportProgress();
   }
 
   // The greedy sweep is myopic: an early comfortable assignment can make a later
   // trip impossible for everyone. Try single-move reshuffles to cover the leftovers.
   await rescueUnassigned(drivers, orderedTrips, assignments, dayStart);
+  reportProgress();
 
   return assignments;
 }
