@@ -6,7 +6,9 @@ export const MRU_AIRPORT = "MRU AIRPORT";
  *  letters wait 75 min; purely numeric IDs clear in 60 min. */
 const CLIENT_READY_BUFFER_ALPHA_MIN = 75;
 const CLIENT_READY_BUFFER_NUMERIC_MIN = 60;
-const TURNAROUND_BUFFER_MIN = 15;
+/** Margin the driver needs between reaching a pickup point and the pickup time.
+ *  Kept small — the dispatcher's real-world plans chain jobs minutes apart. */
+const TURNAROUND_BUFFER_MIN = 5;
 /** 75-min clients spend so long in immigration/baggage that the driver may
  *  arrive at the airport up to this long AFTER landing and still be on time. */
 const LATE_AIRPORT_ARRIVAL_MIN = 30;
@@ -364,12 +366,16 @@ function unassignedAssignment(trip: Trip, reason: string): Assignment {
  *  the largest slack wins, with priority only breaking exact ties. */
 function pickBestDriver(
   candidates: { driver: Driver; feas: FeasibilityResult }[],
-  states: Map<string, DriverRunState>
+  states: Map<string, DriverRunState>,
+  /** Optional randomness for optimizer restarts: occasionally takes the
+   *  runner-up among comfortable drivers to explore different day shapes. */
+  rng?: () => number
 ): { driver: Driver; feas: FeasibilityResult } {
   const comfortable = candidates.filter(
     (c) => c.feas.routingSlackMinutes >= COMFORTABLE_SLACK_MIN
   );
   if (comfortable.length === 0) {
+    // Tight trip: safety beats preference and exploration — largest slack wins.
     return candidates.reduce((best, c) => {
       if (c.feas.routingSlackMinutes !== best.feas.routingSlackMinutes) {
         return c.feas.routingSlackMinutes > best.feas.routingSlackMinutes ? c : best;
@@ -377,18 +383,17 @@ function pickBestDriver(
       return c.driver.priority < best.driver.priority ? c : best;
     });
   }
-  return comfortable.reduce((best, c) => {
-    if (c.driver.priority !== best.driver.priority) {
-      return c.driver.priority < best.driver.priority ? c : best;
+  const ranked = [...comfortable].sort((a, b) => {
+    if (a.driver.priority !== b.driver.priority) return a.driver.priority - b.driver.priority;
+    if (a.feas.travelToStartMinutes !== b.feas.travelToStartMinutes) {
+      return a.feas.travelToStartMinutes - b.feas.travelToStartMinutes;
     }
-    if (c.feas.travelToStartMinutes !== best.feas.travelToStartMinutes) {
-      return c.feas.travelToStartMinutes < best.feas.travelToStartMinutes ? c : best;
-    }
-    const cWork = states.get(c.driver.id)!.workMinutes;
-    const bestWork = states.get(best.driver.id)!.workMinutes;
-    if (cWork !== bestWork) return cWork < bestWork ? c : best;
-    return c.feas.routingSlackMinutes > best.feas.routingSlackMinutes ? c : best;
+    const workDiff = states.get(a.driver.id)!.workMinutes - states.get(b.driver.id)!.workMinutes;
+    if (workDiff !== 0) return workDiff;
+    return b.feas.routingSlackMinutes - a.feas.routingSlackMinutes;
   });
+  if (rng && ranked.length > 1 && rng() < 0.35) return ranked[1];
+  return ranked[0];
 }
 
 interface LaneSim {
@@ -619,7 +624,26 @@ export async function prefetchRouteTimes(
   await Promise.all(workers);
 }
 
-/** Runs the full auto-assign algorithm from scratch over all trips, in chronological order.
+/** Deterministic, cheap pseudo-random generator so optimizer restarts are
+ *  reproducible run to run. */
+function makeRng(seed: number): () => number {
+  let s = seed >>> 0;
+  return () => {
+    s = (s * 1664525 + 1013904223) >>> 0;
+    return s / 4294967296;
+  };
+}
+
+/** How many randomized restarts the optimizer tries on top of the
+ *  deterministic pass. Restarts run entirely on the route library (no API
+ *  calls), so more attempts only cost milliseconds. */
+const OPTIMIZER_RESTARTS = 24;
+
+/** Plans the whole day. The greedy chronological pass runs many times — once
+ *  deterministically, then with seeded randomized tie-breaking — and the best
+ *  complete plan wins: most trips covered, then fewest critical margins, then
+ *  most total slack. This finds the global juggling a human dispatcher does
+ *  (giving up a locally "best" choice early to cover more trips later).
  *
  *  Per trip, in order of authority:
  *    1. trips the dispatcher manually placed (`manualOverride` in `existingAssignments`)
@@ -628,7 +652,7 @@ export async function prefetchRouteTimes(
  *    3. a Driver name already filled in on the sheet (dispatcher preset) — same handling
  *    4. the client's remembered regular driver (`clientPreferences`) — soft: honored
  *       whenever feasible, otherwise the auto pool takes over with a visible note
- *    5. the auto pool (priority → fewest trips → least deadhead → slack)
+ *    5. the auto pool (priority → least deadhead → least work → slack)
  *
  *  Pass the current assignments when re-planning (after a travel-time correction,
  *  roster change, etc.) so manual decisions survive the re-run. */
@@ -637,18 +661,16 @@ export async function autoAssign(
   trips: Trip[],
   existingAssignments: Record<string, Assignment> = {},
   clientPreferences: Record<string, string> = {},
-  /** Called after each placement so the UI can show a progress bar.
+  /** Called after each optimizer pass so the UI can show a progress bar.
    *  `total` includes one extra step for the final rescue pass. */
   onProgress?: (done: number, total: number) => void,
   waitMode: WaitMode = "byId"
 ): Promise<Record<string, Assignment>> {
   const orderedTrips = [...trips].sort((a, b) => a.time - b.time);
-  const progressTotal = orderedTrips.length + 1; // +1 for the rescue pass
+  const progressTotal = OPTIMIZER_RESTARTS + 2; // deterministic pass + restarts + rescue
   let progressDone = 0;
   const reportProgress = () => onProgress?.(++progressDone, progressTotal);
   const dayStart = orderedTrips.length > 0 ? startOfDay(orderedTrips[0].time) : startOfDay(Date.now());
-  const states = initDriverStates(drivers, dayStart);
-  const assignments: Record<string, Assignment> = {};
 
   const driversByName = new Map<string, Driver>();
   const driversById = new Map<string, Driver>();
@@ -656,6 +678,13 @@ export async function autoAssign(
     driversByName.set(normalizeDriverName(driver.name), driver);
     driversById.set(driver.id, driver);
   }
+
+  const runPass = async (
+    passDrivers: Driver[],
+    rng?: () => number
+  ): Promise<Record<string, Assignment>> => {
+  const states = initDriverStates(passDrivers, dayStart);
+  const assignments: Record<string, Assignment> = {};
 
   const placeTrip = async (trip: Trip): Promise<void> => {
     // Manual placement by the dispatcher is pinned across re-runs
@@ -700,7 +729,7 @@ export async function autoAssign(
 
     // Check every driver in parallel — feasibility is read-only over states
     const results = await Promise.all(
-      drivers.map(async (driver) => ({
+      passDrivers.map(async (driver) => ({
         driver,
         feas: await checkFeasibility(trip, states.get(driver.id)!, dayStart, waitMode),
       }))
@@ -736,7 +765,7 @@ export async function autoAssign(
       return;
     }
 
-    const best = pickBestDriver(feasible, states);
+    const best = pickBestDriver(feasible, states, rng);
     applyAssignment(states.get(best.driver.id)!, trip, best.feas, waitMode);
     const assignment = buildAssignment(trip, best.driver, best.feas, dayStart);
     if (preferredName) {
@@ -748,15 +777,49 @@ export async function autoAssign(
 
   for (const trip of orderedTrips) {
     await placeTrip(trip);
+  }
+  return assignments;
+  };
+
+  // Score a complete plan: coverage first, then safety, then comfort.
+  const scoreOf = (plan: Record<string, Assignment>): [number, number, number] => {
+    const vals = Object.values(plan);
+    return [
+      vals.filter((v) => v.driverId).length,
+      -vals.filter((v) => v.driverId && v.color === "red").length,
+      vals.reduce((sum, v) => sum + (v.slackMinutes ?? 0), 0),
+    ];
+  };
+  const beats = (a: [number, number, number], b: [number, number, number]) =>
+    a[0] !== b[0] ? a[0] > b[0] : a[1] !== b[1] ? a[1] > b[1] : a[2] > b[2];
+
+  // Deterministic pass first; randomized restarts must strictly beat it.
+  let bestPlan = await runPass(drivers);
+  let bestScore = scoreOf(bestPlan);
+  reportProgress();
+
+  for (let attempt = 1; attempt <= OPTIMIZER_RESTARTS; attempt++) {
+    const rng = makeRng(attempt * 2654435761);
+    const shuffled = [...drivers];
+    for (let i = shuffled.length - 1; i > 0; i--) {
+      const j = Math.floor(rng() * (i + 1));
+      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    }
+    const candidate = await runPass(shuffled, rng);
+    const candidateScore = scoreOf(candidate);
+    if (beats(candidateScore, bestScore)) {
+      bestPlan = candidate;
+      bestScore = candidateScore;
+    }
     reportProgress();
   }
 
   // The greedy sweep is myopic: an early comfortable assignment can make a later
   // trip impossible for everyone. Try single-move reshuffles to cover the leftovers.
-  await rescueUnassigned(drivers, orderedTrips, assignments, dayStart, waitMode);
+  await rescueUnassigned(drivers, orderedTrips, bestPlan, dayStart, waitMode);
   reportProgress();
 
-  return assignments;
+  return bestPlan;
 }
 
 /** Replays a single driver's assigned trips in chronological order to recompute

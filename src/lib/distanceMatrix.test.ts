@@ -48,6 +48,23 @@ describe("getTravelTime route library", () => {
     expect(fetchMock.mock.calls.length).toBe(callsAfterFirst); // no extra API call
   });
 
+  it("distrusts live times that contradict geography (wrong village in address)", async () => {
+    // "LUX Grand Gaube ... Mahebourg" geocodes to Mahebourg (next to the airport),
+    // giving an absurd 16 min for what is really a ~70 min run to the north.
+    fetchMock.mockImplementation(async (_origin: string, destination: string) => {
+      if (destination === "Grand Gaube, Mauritius") {
+        return { durationInTrafficMinutes: 71, durationMinutes: 68, statusOk: true }; // village-level truth
+      }
+      return { durationInTrafficMinutes: 16, durationMinutes: 15, statusOk: true }; // bad geocode
+    });
+    const result = await getTravelTime(
+      "MRU AIRPORT",
+      "LUX Grand Gaube Resort, XMX6+33F, Rue Shivananda, Mahebourg, Mauritius",
+      new Date()
+    );
+    expect(result).toEqual({ durationMinutes: 71, estimated: false });
+  });
+
   it("falls back to an estimate only when both exact and village lookups fail", async () => {
     fetchMock.mockResolvedValue({ durationInTrafficMinutes: null, durationMinutes: null, statusOk: false });
     const result = await getTravelTime("Mystery place one", "Mystery place two", new Date());

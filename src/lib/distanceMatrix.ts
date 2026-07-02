@@ -48,6 +48,22 @@ function fallbackEstimate(origin: string, destination: string): DistanceMatrixRe
   return { durationMinutes: regional ?? STATIC_FALLBACK_MINUTES, estimated: true };
 }
 
+/** True when a live/cached duration contradicts the island's geography for
+ *  addresses whose localities we recognize — the telltale sign of a sheet
+ *  address naming the wrong village ("LUX Grand Gaube ... Mahebourg"), which
+ *  sends Google's geocoder to the wrong end of the island. */
+function contradictsGeography(minutes: number, origin: string, destination: string): boolean {
+  const originRegion = findRegion(origin);
+  const destRegion = findRegion(destination);
+  if (!originRegion || !destRegion || originRegion === destRegion) return false;
+  const plausible = estimateTravelMinutes(origin, destination);
+  if (plausible === null) return false;
+  return (
+    (minutes < plausible * 0.4 || minutes > plausible * 2.5) &&
+    Math.abs(minutes - plausible) > 20
+  );
+}
+
 function normalizeLocation(loc: string): string {
   return loc.trim().toLowerCase().replace(/\s+/g, " ");
 }
@@ -123,7 +139,12 @@ export async function getTravelTime(
   if (cached && Date.now() - cached.cachedAt < CACHE_TTL_MS) {
     // A cached fallback estimate must not block a live lookup once the API is
     // available again — only serve it when live lookups aren't possible anyway.
-    if (!cached.estimated || !isGoogleMapsConfigured()) {
+    // Cached live values that contradict geography (wrong-village addresses)
+    // are also re-checked instead of served.
+    const cachedSuspicious =
+      !cached.estimated &&
+      contradictsGeography(cached.durationMinutes, trimmedOrigin, trimmedDestination);
+    if ((!cached.estimated && !cachedSuspicious) || !isGoogleMapsConfigured()) {
       if (!cached.estimated) reportLiveLookupOk(); // fresh live data proves Maps works
       return { durationMinutes: cached.durationMinutes, estimated: cached.estimated };
     }
@@ -166,18 +187,32 @@ export async function getTravelTime(
   };
 
   try {
+    const originRegion = findRegion(trimmedOrigin);
+    const destRegion = findRegion(trimmedDestination);
+    const villageOrigin = originRegion ? `${originRegion.name}, Mauritius` : trimmedOrigin;
+    const villageDest = destRegion ? `${destRegion.name}, Mauritius` : trimmedDestination;
+    const villageDiffers =
+      villageOrigin !== trimmedOrigin || villageDest !== trimmedDestination;
+
     let result = await attemptLive(trimmedOrigin, trimmedDestination);
-    if (!result) {
+
+    if (!result && villageDiffers) {
       // The exact address wouldn't geocode — retry at village level. Still real
       // live traffic, just measured to the locality instead of the gate.
-      const originRegion = findRegion(trimmedOrigin);
-      const destRegion = findRegion(trimmedDestination);
-      const villageOrigin = originRegion ? `${originRegion.name}, Mauritius` : trimmedOrigin;
-      const villageDest = destRegion ? `${destRegion.name}, Mauritius` : trimmedDestination;
-      if (villageOrigin !== trimmedOrigin || villageDest !== trimmedDestination) {
-        result = await attemptLive(villageOrigin, villageDest);
-      }
+      result = await attemptLive(villageOrigin, villageDest);
+    } else if (
+      result &&
+      villageDiffers &&
+      contradictsGeography(result.durationMinutes, trimmedOrigin, trimmedDestination)
+    ) {
+      // Sanity check against the island's geography: sheet addresses sometimes
+      // name the wrong village ("LUX Grand Gaube ... Mahebourg"), sending Google
+      // to the wrong end of the island. If the live time is wildly off the
+      // regional estimate, trust the locality the hotel name mentions instead.
+      const villageResult = await attemptLive(villageOrigin, villageDest);
+      if (villageResult) result = villageResult;
     }
+
     return writeCache(result ?? fallbackEstimate(trimmedOrigin, trimmedDestination));
   } catch {
     return writeCache(fallbackEstimate(trimmedOrigin, trimmedDestination));

@@ -138,15 +138,15 @@ describe("autoAssign", () => {
   });
 
   it("waits 60 min after landing for numeric IDs, 75 min for IDs with letters", async () => {
-    // One driver: 10:00 arrival to Hotel A, then a 12:05 departure from Hotel A.
-    // Numeric ID: ready 11:00, done 11:40 (+40 drive), reach pickup 12:00 — fits.
-    // Alpha ID: ready 11:15, done 11:55, reach pickup 12:15 — misses 12:05.
+    // One driver: 10:00 arrival to Hotel A, then a 12:00 departure from Hotel A.
+    // Numeric ID: ready 11:00, done 11:40 (+40 drive), at pickup 11:50 — fits.
+    // Alpha ID: ready 11:15, done 11:55, at pickup 12:05 — misses 12:00.
     const solo = [driver("d1", "Solo")];
     const makeDay = (clientId: string): Trip[] => {
       const arr = arrival("t1", at(10));
       arr.clientId = clientId;
       const dep: Trip = {
-        ...arrival("t2", at(12, 5)),
+        ...arrival("t2", at(12)),
         type: "departure",
         from: "Hotel A",
         to: "MRU Airport",
