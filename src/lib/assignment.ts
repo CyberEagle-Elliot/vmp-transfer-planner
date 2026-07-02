@@ -25,7 +25,9 @@ function shiftMinutesToTimestamp(dayStartMs: number, minutesSinceMidnight: numbe
 interface DriverRunState {
   driver: Driver;
   freeAt: number; // epoch ms
-  lastLocation: string;
+  /** Where the driver ends up after their last assigned job; null before the
+   *  first job — drivers start their day wherever that first job is. */
+  lastLocation: string | null;
   tourWindows: { startTime: number; endTime: number }[];
   tripCount: number;
   /** Accumulated driving/duty minutes today (deadhead + trip legs + tour windows) —
@@ -43,7 +45,7 @@ function initDriverStates(drivers: Driver[], anchorDayStart: number): Map<string
     map.set(driver.id, {
       driver,
       freeAt,
-      lastLocation: "base",
+      lastLocation: null,
       tourWindows: [],
       tripCount: 0,
       workMinutes: 0,
@@ -123,13 +125,15 @@ async function checkFeasibility(
     };
   }
 
+  // First job of the day: the driver starts there directly (no prior location,
+  // no deadhead) — they just need to be free early enough.
+  const NO_TRAVEL = { durationMinutes: 0, estimated: false };
+
   if (trip.type === "arrival") {
     const clientReadyTime = trip.time + minutesToMs(CLIENT_READY_BUFFER_MIN);
-    const travelToAirport = await getTravelTime(
-      state.lastLocation,
-      MRU_AIRPORT,
-      new Date(state.freeAt)
-    );
+    const travelToAirport = state.lastLocation
+      ? await getTravelTime(state.lastLocation, MRU_AIRPORT, new Date(state.freeAt))
+      : NO_TRAVEL;
     const requiredArrival = state.freeAt + minutesToMs(travelToAirport.durationMinutes + TURNAROUND_BUFFER_MIN);
     const feasibleRouting = requiredArrival <= trip.time;
     const routingSlackMinutes = (trip.time - requiredArrival) / 60000;
@@ -168,11 +172,9 @@ async function checkFeasibility(
   }
 
   if (trip.type === "departure") {
-    const travelToPickup = await getTravelTime(
-      state.lastLocation,
-      trip.from,
-      new Date(state.freeAt)
-    );
+    const travelToPickup = state.lastLocation
+      ? await getTravelTime(state.lastLocation, trip.from, new Date(state.freeAt))
+      : NO_TRAVEL;
     const requiredArrival = state.freeAt + minutesToMs(travelToPickup.durationMinutes + TURNAROUND_BUFFER_MIN);
     const feasibleRouting = requiredArrival <= trip.time;
     const routingSlackMinutes = (trip.time - requiredArrival) / 60000;
@@ -211,11 +213,9 @@ async function checkFeasibility(
   }
 
   if (trip.type === "tour" && trip.tourWindow) {
-    const travelToStart = await getTravelTime(
-      state.lastLocation,
-      trip.tourWindow.startLocation,
-      new Date(state.freeAt)
-    );
+    const travelToStart = state.lastLocation
+      ? await getTravelTime(state.lastLocation, trip.tourWindow.startLocation, new Date(state.freeAt))
+      : NO_TRAVEL;
     const requiredArrival = state.freeAt + minutesToMs(travelToStart.durationMinutes + TURNAROUND_BUFFER_MIN);
     const feasibleRouting = requiredArrival <= trip.tourWindow.startTime;
     const routingSlackMinutes = (trip.tourWindow.startTime - requiredArrival) / 60000;
@@ -378,7 +378,7 @@ async function simulateLane(
     driver,
     freeAt:
       driver.shiftStart !== null ? shiftMinutesToTimestamp(dayStart, driver.shiftStart) : dayStart,
-    lastLocation: "base",
+    lastLocation: null,
     tourWindows: [],
     tripCount: 0,
     workMinutes: 0,
@@ -734,7 +734,7 @@ export async function recomputeDriverLane(
   const state: DriverRunState = {
     driver,
     freeAt: driver.shiftStart !== null ? shiftMinutesToTimestamp(dayStart, driver.shiftStart) : dayStart,
-    lastLocation: "base",
+    lastLocation: null,
     tourWindows: [],
     tripCount: 0,
     workMinutes: 0,

@@ -66,11 +66,11 @@ describe("autoAssign", () => {
   });
 
   it("prefers the largest slack when the trip is tight, regardless of priority", async () => {
-    // High-priority driver only starts at 11:30: 30 min travel + 15 min buffer
-    // puts them at the airport at exactly 12:15 — zero slack for a 12:15 landing.
+    // High-priority driver only starts at 11:30: with the 15 min buffer they make
+    // an 11:50 landing with just 5 min slack — the free normal driver is safer.
     const highTight: Driver = { ...driver("d1", "HighTight", 1), shiftStart: 11 * 60 + 30 };
     const normalFree = driver("d2", "NormalFree", 2);
-    const result = await autoAssign([highTight, normalFree], [arrival("t1", at(12, 15))]);
+    const result = await autoAssign([highTight, normalFree], [arrival("t1", at(11, 50))]);
     expect(result["t1"].driverId).toBe("d2");
   });
 

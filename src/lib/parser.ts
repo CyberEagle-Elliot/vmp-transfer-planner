@@ -179,7 +179,7 @@ export function parseTourWindow(
     .map((leg) => leg.split(/→|->/).map((s) => s.trim()))
     .filter((parts) => parts.length >= 2);
 
-  const startLocation = arrowLegs[0]?.[0] || "base";
+  const startLocation = arrowLegs[0]?.[0] || "";
   const endLocation = arrowLegs[arrowLegs.length - 1]?.[1] || startLocation;
 
   return { startTime, endTime, startLocation, endLocation };
