@@ -10,6 +10,7 @@ const EDITABLE_FIELDS: { key: keyof ParsedTripRow; label: string }[] = [
   { key: "numbering", label: "Numbering" },
   { key: "clientId", label: "ID" },
   { key: "driverName", label: "Driver" },
+  { key: "requestedDriverName", label: "Requested Driver" },
   { key: "localTimeRaw", label: "Local Time" },
   { key: "from", label: "From" },
   { key: "to", label: "To" },

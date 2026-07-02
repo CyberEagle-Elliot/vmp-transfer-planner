@@ -52,6 +52,10 @@ function normalizeDriverName(name: string): string {
   return name.trim().toLowerCase().replace(/\s+/g, " ");
 }
 
+export function normalizeClientId(clientId: string): string {
+  return clientId.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
 function isWithinShiftStart(driver: Driver, dayStart: number, tripTime: number): boolean {
   if (driver.shiftStart === null) return true;
   return tripTime >= shiftMinutesToTimestamp(dayStart, driver.shiftStart);
@@ -369,17 +373,22 @@ async function assignLocked(
 
 /** Runs the full auto-assign algorithm from scratch over all trips, in chronological order.
  *
- *  Locked trips are honored before the auto pool is considered (assigned even if
- *  tight/infeasible, with a visible warning):
+ *  Per trip, in order of authority:
  *    1. trips the dispatcher manually placed (`manualOverride` in `existingAssignments`)
- *    2. trips with a Driver name already on the sheet
+ *    2. the driver the customer requested (`Requested Driver` on the sheet) — hard
+ *       constraint: assigned even if tight/infeasible, with a visible warning
+ *    3. a Driver name already filled in on the sheet (dispatcher preset) — same handling
+ *    4. the client's remembered regular driver (`clientPreferences`) — soft: honored
+ *       whenever feasible, otherwise the auto pool takes over with a visible note
+ *    5. the auto pool (priority → fewest trips → least deadhead → slack)
  *
  *  Pass the current assignments when re-planning (after a travel-time correction,
  *  roster change, etc.) so manual decisions survive the re-run. */
 export async function autoAssign(
   drivers: Driver[],
   trips: Trip[],
-  existingAssignments: Record<string, Assignment> = {}
+  existingAssignments: Record<string, Assignment> = {},
+  clientPreferences: Record<string, string> = {}
 ): Promise<Record<string, Assignment>> {
   const orderedTrips = [...trips].sort((a, b) => a.time - b.time);
   const dayStart = orderedTrips.length > 0 ? startOfDay(orderedTrips[0].time) : startOfDay(Date.now());
@@ -402,6 +411,21 @@ export async function autoAssign(
         assignments[trip.id] = await assignLocked(trip, pinnedDriver, states, dayStart, true);
         continue;
       }
+    }
+
+    // The driver the customer asked for is a hard constraint
+    const requestedName = trip.requestedDriverName.trim();
+    if (requestedName) {
+      const requested = driversByName.get(normalizeDriverName(requestedName));
+      if (!requested) {
+        assignments[trip.id] = unassignedAssignment(
+          trip,
+          `Customer requested "${requestedName}", who is not in the roster`
+        );
+        continue;
+      }
+      assignments[trip.id] = await assignLocked(trip, requested, states, dayStart, false);
+      continue;
     }
 
     // Preset driver from the sheet wins over the auto pool
@@ -428,6 +452,19 @@ export async function autoAssign(
     );
     const feasible = results.filter((r) => r.feas.feasible);
 
+    // The client's remembered regular driver gets first refusal when feasible
+    const preferredName = clientPreferences[normalizeClientId(trip.clientId)];
+    if (preferredName && feasible.length > 0) {
+      const preferred = feasible.find(
+        (r) => normalizeDriverName(r.driver.name) === normalizeDriverName(preferredName)
+      );
+      if (preferred) {
+        applyAssignment(states.get(preferred.driver.id)!, trip, preferred.feas);
+        assignments[trip.id] = buildAssignment(trip, preferred.driver, preferred.feas, dayStart);
+        continue;
+      }
+    }
+
     if (feasible.length === 0) {
       // Report the closest miss: the driver who came nearest to making it
       let closest: { driver: Driver; feas: FeasibilityResult } | null = null;
@@ -446,7 +483,12 @@ export async function autoAssign(
 
     const best = pickBestDriver(feasible, states);
     applyAssignment(states.get(best.driver.id)!, trip, best.feas);
-    assignments[trip.id] = buildAssignment(trip, best.driver, best.feas, dayStart);
+    const assignment = buildAssignment(trip, best.driver, best.feas, dayStart);
+    if (preferredName) {
+      // A remembered preference existed but that driver couldn't take this trip
+      assignment.reason = `Client's regular driver ${preferredName} isn't available for this trip`;
+    }
+    assignments[trip.id] = assignment;
   }
 
   return assignments;

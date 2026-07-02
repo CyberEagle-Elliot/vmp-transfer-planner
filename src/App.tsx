@@ -1,12 +1,13 @@
 import { useEffect, useState } from "react";
 import type { Assignment, Driver, ParsedTripRow, Trip } from "./types";
 import { classifyTrips } from "./lib/parser";
-import { autoAssign, recomputeDriverLane } from "./lib/assignment";
+import { autoAssign, recomputeDriverLane, normalizeClientId } from "./lib/assignment";
 import {
   loadAppState,
   saveRoster,
   saveTrips,
   saveAssignments,
+  saveClientPreferences,
   clearTripsOnly,
 } from "./lib/storage";
 import { isGoogleMapsConfigured } from "./lib/googleMapsClient";
@@ -25,12 +26,19 @@ export default function App() {
   const [assignments, setAssignments] = useState<Record<string, Assignment>>(
     initial.assignments
   );
+  const [clientPreferences, setClientPreferences] = useState<Record<string, string>>(
+    initial.clientPreferences
+  );
   const [view, setView] = useState<View>(initial.trips.length > 0 ? "board" : "setup");
   const [isAssigning, setIsAssigning] = useState(false);
 
   useEffect(() => {
     saveRoster(roster);
   }, [roster]);
+
+  useEffect(() => {
+    saveClientPreferences(clientPreferences);
+  }, [clientPreferences]);
 
   useEffect(() => {
     saveTrips(trips);
@@ -48,7 +56,7 @@ export default function App() {
     setIsAssigning(true);
     try {
       const { trips: classified } = classifyTrips(rows.filter((r) => !r.parseError));
-      const result = await autoAssign(drivers, classified);
+      const result = await autoAssign(drivers, classified, {}, clientPreferences);
       setTrips(classified);
       setAssignments(result);
       setView("board");
@@ -63,11 +71,23 @@ export default function App() {
     if (trips.length === 0) return;
     setIsAssigning(true);
     try {
-      const result = await autoAssign(roster, trips, assignments);
+      const result = await autoAssign(roster, trips, assignments, clientPreferences);
       setAssignments(result);
     } finally {
       setIsAssigning(false);
     }
+  }
+
+  /** Remembers (or forgets, with null) a client's regular driver for future planning. */
+  function handleSetClientPreference(clientId: string, driverName: string | null) {
+    const key = normalizeClientId(clientId);
+    if (!key) return;
+    setClientPreferences((prev) => {
+      const next = { ...prev };
+      if (driverName) next[key] = driverName;
+      else delete next[key];
+      return next;
+    });
   }
 
   async function handleReassign(tripId: string, newDriverId: string | null) {
@@ -167,7 +187,9 @@ export default function App() {
             drivers={roster}
             trips={trips}
             assignments={assignments}
+            clientPreferences={clientPreferences}
             onReassign={handleReassign}
+            onSetClientPreference={handleSetClientPreference}
           />
         </>
       )}

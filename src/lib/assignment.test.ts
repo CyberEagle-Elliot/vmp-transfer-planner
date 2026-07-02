@@ -40,6 +40,7 @@ function arrival(id: string, timeMs: number, to = "Hotel A"): Trip {
     comment: "",
     tourWindow: null,
     presetDriverName: "",
+    requestedDriverName: "",
   };
 }
 
@@ -110,5 +111,56 @@ describe("autoAssign", () => {
     const result = await autoAssign([early], [arrival("t1", at(12))]);
     expect(result["t1"].driverId).toBeNull();
     expect(result["t1"].reason.length).toBeGreaterThan(0);
+  });
+
+  it("honors a customer's requested driver over priority and presets", async () => {
+    const rajesh = driver("d1", "Rajesh", 1);
+    const kevin = driver("d2", "Kevin", 3);
+    const trip = arrival("t1", at(12));
+    trip.presetDriverName = "Rajesh";
+    trip.requestedDriverName = "Kevin"; // customer beats the sheet preset
+    const result = await autoAssign([rajesh, kevin], [trip]);
+    expect(result["t1"].driverId).toBe("d2");
+  });
+
+  it("assigns a requested driver even when tight, with a visible warning", async () => {
+    // Requested driver's shift ends before the trip completes — infeasible,
+    // but the customer asked, so it's assigned with a red warning.
+    const requested: Driver = { ...driver("d1", "Rajesh"), shiftEnd: 12 * 60 };
+    const other = driver("d2", "Kevin");
+    const trip = arrival("t1", at(12));
+    trip.requestedDriverName = "Rajesh";
+    const result = await autoAssign([requested, other], [trip]);
+    expect(result["t1"].driverId).toBe("d1");
+    expect(result["t1"].color).toBe("red");
+    expect(result["t1"].reason.length).toBeGreaterThan(0);
+  });
+
+  it("flags unknown requested driver names so the dispatcher sees the mismatch", async () => {
+    const trip = arrival("t1", at(12));
+    trip.requestedDriverName = "Ghost Driver";
+    const result = await autoAssign([driver("d1", "Rajesh")], [trip]);
+    expect(result["t1"].driverId).toBeNull();
+    expect(result["t1"].reason).toContain("Ghost Driver");
+  });
+
+  it("gives a client's remembered regular driver first refusal when feasible", async () => {
+    const rajesh = driver("d1", "Rajesh", 1); // higher priority — would normally win
+    const kevin = driver("d2", "Kevin", 3);
+    const trip = arrival("t1", at(12));
+    trip.clientId = "C100";
+    const result = await autoAssign([rajesh, kevin], [trip], {}, { c100: "Kevin" });
+    expect(result["t1"].driverId).toBe("d2");
+    expect(result["t1"].reason).toBe("");
+  });
+
+  it("falls back with a note when the regular driver isn't available", async () => {
+    const busy: Driver = { ...driver("d1", "Rajesh"), shiftEnd: 8 * 60 }; // can't do a noon trip
+    const kevin = driver("d2", "Kevin");
+    const trip = arrival("t1", at(12));
+    trip.clientId = "C100";
+    const result = await autoAssign([busy, kevin], [trip], {}, { c100: "Rajesh" });
+    expect(result["t1"].driverId).toBe("d2");
+    expect(result["t1"].reason).toContain("Rajesh");
   });
 });

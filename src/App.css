@@ -300,6 +300,44 @@
   font-weight: 700;
 }
 
+.trip-request {
+  font-size: 0.78rem;
+  font-weight: 800;
+  padding: 0.25rem 0.45rem;
+  border: 1px solid;
+}
+
+.trip-request.honored {
+  color: var(--accent-green-fg);
+  background: var(--accent-green-bg);
+  border-color: var(--accent-green-line);
+}
+
+.trip-request.not-honored {
+  color: var(--accent-red-fg);
+  background: var(--accent-red-bg);
+  border-color: var(--accent-red-line);
+}
+
+.trip-preference {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-top: 0.2rem;
+}
+
+.pref-label {
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.pref-btn {
+  min-height: 32px;
+  padding: 0.2em 0.6em;
+  font-size: 0.75rem;
+}
+
 .trip-estimated-flag {
   font-size: 0.68rem;
   text-transform: uppercase;

@@ -13,6 +13,7 @@ const KEYS = {
   assignments: "vmp.assignments.v1",
   distanceCache: "vmp.distanceCache.v1",
   travelOverrides: "vmp.travelOverrides.v1",
+  clientPreferences: "vmp.clientPreferences.v1",
 } as const;
 
 function readJSON<T>(key: string, fallback: T): T {
@@ -72,6 +73,13 @@ export function saveTravelOverrides(overrides: Record<string, TravelOverride>): 
   writeJSON(KEYS.travelOverrides, overrides);
 }
 
+export function loadClientPreferences(): Record<string, string> {
+  return readJSON<Record<string, string>>(KEYS.clientPreferences, {});
+}
+export function saveClientPreferences(prefs: Record<string, string>): void {
+  writeJSON(KEYS.clientPreferences, prefs);
+}
+
 export function loadAppState(): AppState {
   return {
     roster: loadRoster(),
@@ -79,6 +87,7 @@ export function loadAppState(): AppState {
     assignments: loadAssignments(),
     distanceCache: loadDistanceCache(),
     travelOverrides: loadTravelOverrides(),
+    clientPreferences: loadClientPreferences(),
   };
 }
 

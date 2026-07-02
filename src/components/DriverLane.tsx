@@ -9,7 +9,9 @@ interface Props {
   allTrips: Trip[];
   drivers: Driver[];
   assignments: Record<string, Assignment>;
+  clientPreferences: Record<string, string>;
   onReassign: (tripId: string, driverId: string | null) => void;
+  onSetClientPreference: (clientId: string, driverName: string | null) => void;
 }
 
 export default function DriverLane({
@@ -18,7 +20,9 @@ export default function DriverLane({
   allTrips,
   drivers,
   assignments,
+  clientPreferences,
   onReassign,
+  onSetClientPreference,
 }: Props) {
   const shiftLabel =
     driver.shiftStart !== null || driver.shiftEnd !== null
@@ -47,7 +51,9 @@ export default function DriverLane({
             trip={trip}
             assignment={assignments[trip.id]}
             drivers={drivers}
+            clientPreferences={clientPreferences}
             onReassign={onReassign}
+            onSetClientPreference={onSetClientPreference}
           />
         ))}
       </div>

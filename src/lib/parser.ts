@@ -6,6 +6,14 @@ const HEADER_ALIASES: Record<string, string[]> = {
   numbering: ["numbering", "number", "no", "no.", "#"],
   id: ["id"],
   driver: ["driver"],
+  requestedDriver: [
+    "requested driver",
+    "requested",
+    "request",
+    "preferred driver",
+    "client driver",
+    "driver request",
+  ],
   localTime: ["local time", "localtime", "time"],
   from: ["from"],
   to: ["to"],
@@ -107,6 +115,7 @@ export function parseWorkbook(data: ArrayBuffer): WorkbookParseResult {
       numbering: get("numbering"),
       clientId: get("id"),
       driverName: get("driver"),
+      requestedDriverName: get("requestedDriver"),
       localTimeRaw,
       localTime,
       from: get("from"),
@@ -211,6 +220,7 @@ export function classifyTrip(row: ParsedTripRow): Trip | null {
     comment: row.comment,
     tourWindow,
     presetDriverName: row.driverName,
+    requestedDriverName: row.requestedDriverName,
   };
 }
 

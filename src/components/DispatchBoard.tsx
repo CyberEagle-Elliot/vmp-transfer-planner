@@ -6,10 +6,19 @@ interface Props {
   drivers: Driver[];
   trips: Trip[];
   assignments: Record<string, Assignment>;
+  clientPreferences: Record<string, string>;
   onReassign: (tripId: string, driverId: string | null) => void;
+  onSetClientPreference: (clientId: string, driverName: string | null) => void;
 }
 
-export default function DispatchBoard({ drivers, trips, assignments, onReassign }: Props) {
+export default function DispatchBoard({
+  drivers,
+  trips,
+  assignments,
+  clientPreferences,
+  onReassign,
+  onSetClientPreference,
+}: Props) {
   const sortedTrips = [...trips].sort((a, b) => a.time - b.time);
   const unassigned = sortedTrips.filter((t) => !assignments[t.id]?.driverId);
 
@@ -36,7 +45,9 @@ export default function DispatchBoard({ drivers, trips, assignments, onReassign 
               trip={trip}
               assignment={assignments[trip.id]}
               drivers={drivers}
+              clientPreferences={clientPreferences}
               onReassign={onReassign}
+              onSetClientPreference={onSetClientPreference}
             />
           ))}
         </div>
@@ -50,7 +61,9 @@ export default function DispatchBoard({ drivers, trips, assignments, onReassign 
           allTrips={sortedTrips}
           drivers={drivers}
           assignments={assignments}
+          clientPreferences={clientPreferences}
           onReassign={onReassign}
+          onSetClientPreference={onSetClientPreference}
         />
       ))}
     </div>

@@ -72,8 +72,10 @@ local testing.
 ## How trips are classified
 
 The uploaded sheet is matched by header name (case-insensitive, any column
-order): `Numbering`, `ID`, `Driver`, `Local Time`, `From`, `To`,
-`Flight Number`, `Comment`. `Local Time` is parsed as `DD/MM/YYYY HH:MM`.
+order): `Numbering`, `ID`, `Driver`, `Requested Driver`, `Local Time`,
+`From`, `To`, `Flight Number`, `Comment`. `Local Time` is parsed as
+`DD/MM/YYYY HH:MM`. All columns except `Local Time`/`From`/`To` are
+optional.
 
 - **Arrival** — `From` contains "MRU". `Local Time` is treated as the
   flight's landing time.
@@ -107,12 +109,32 @@ Drivers with a shift start/end are only feasible if the trip starts at or
 after `shiftStart` and finishes at or before `shiftEnd` — this is checked
 even if the routing math would otherwise work.
 
-Rows with a `Driver` name already filled in on the sheet are **locked to
-that driver** (matched against the roster case-insensitively) before the
-auto pool is considered. If the preset is tight or infeasible the trip is
-still assigned to that driver, flagged red with a warning; if the name
-isn't in the roster the trip lands in the unassigned lane with a clear
-reason.
+Each trip is placed by the first rule that applies, in order of authority:
+
+1. **Manual placement** — anything you set via the Reassign dropdown is
+   pinned and survives re-runs.
+2. **Customer request** — a name in the `Requested Driver` column (aliases:
+   `Requested`, `Preferred Driver`, `Client Driver`, `Driver Request`) is a
+   hard constraint. The trip is locked to that driver even if the schedule
+   is tight or infeasible (flagged red with a warning so you can decide),
+   and beats a `Driver` preset on the same row. The card shows
+   "★ Customer requested …" — green when honored. If the name isn't in the
+   roster, the trip lands in the unassigned lane saying so.
+3. **Sheet preset** — a name in the `Driver` column locks the trip the same
+   way (dispatcher pre-fill).
+4. **Client's regular driver** — a remembered client → driver preference
+   (see below) gets first refusal whenever that driver is feasible;
+   otherwise the auto pool takes over and the card notes that the regular
+   driver wasn't available.
+5. **Auto pool** — everything else.
+
+Names are matched against the roster case-insensitively.
+
+**Remembering regular drivers**: on any assigned trip card with a client
+ID, click "☆ Remember *driver* for *client*". From then on, every trip for
+that client ID prefers that driver automatically (a soft preference — never
+at the cost of an impossible schedule). "Forget" removes it. Preferences
+persist across days and "Clear day".
 
 Each driver has a **priority** (High / Normal / Low, set in the roster).
 Among feasible drivers with a **comfortable margin** (≥ 30 min slack) the

@@ -1,16 +1,45 @@
 import type { Assignment, Driver, Trip } from "../types";
 import { formatTime, tripTypeLabel } from "../lib/format";
+import { normalizeClientId } from "../lib/assignment";
 
 interface Props {
   trip: Trip;
   assignment: Assignment | undefined;
   drivers: Driver[];
+  clientPreferences: Record<string, string>;
   onReassign: (tripId: string, driverId: string | null) => void;
+  onSetClientPreference: (clientId: string, driverName: string | null) => void;
 }
 
-export default function TripCard({ trip, assignment, drivers, onReassign }: Props) {
+function sameDriverName(a: string, b: string): boolean {
+  return a.trim().toLowerCase() === b.trim().toLowerCase();
+}
+
+export default function TripCard({
+  trip,
+  assignment,
+  drivers,
+  clientPreferences,
+  onReassign,
+  onSetClientPreference,
+}: Props) {
   const unassigned = !assignment || assignment.driverId === null;
   const color = assignment?.color ?? "red";
+
+  const assignedDriver = drivers.find((d) => d.id === assignment?.driverId);
+  const requestedName = trip.requestedDriverName.trim();
+  const requestHonored =
+    requestedName !== "" &&
+    assignedDriver !== undefined &&
+    sameDriverName(assignedDriver.name, requestedName);
+
+  const preferredName = trip.clientId
+    ? clientPreferences[normalizeClientId(trip.clientId)]
+    : undefined;
+  const canRemember =
+    trip.clientId.trim() !== "" &&
+    assignedDriver !== undefined &&
+    (!preferredName || !sameDriverName(preferredName, assignedDriver.name));
 
   return (
     <div className={`trip-card ${unassigned ? "unassigned" : ""}`}>
@@ -28,6 +57,13 @@ export default function TripCard({ trip, assignment, drivers, onReassign }: Prop
       <div className="trip-route">
         {tripTypeLabel(trip.type)} · {trip.from || "—"} → {trip.to || "—"}
       </div>
+
+      {requestedName && (
+        <div className={`trip-request ${requestHonored ? "honored" : "not-honored"}`}>
+          ★ Customer requested {requestedName}
+          {!requestHonored && " — not honored"}
+        </div>
+      )}
 
       <div className="trip-meta">
         {trip.numbering && <>#{trip.numbering} </>}
@@ -62,6 +98,34 @@ export default function TripCard({ trip, assignment, drivers, onReassign }: Prop
           ))}
         </select>
       </div>
+
+      {trip.clientId.trim() !== "" && (preferredName || canRemember) && (
+        <div className="trip-preference">
+          {preferredName && (
+            <>
+              <span className="pref-label">
+                Regular driver for {trip.clientId}: <strong>{preferredName}</strong>
+              </span>
+              <button
+                type="button"
+                className="ghost pref-btn"
+                onClick={() => onSetClientPreference(trip.clientId, null)}
+              >
+                Forget
+              </button>
+            </>
+          )}
+          {canRemember && (
+            <button
+              type="button"
+              className="ghost pref-btn"
+              onClick={() => onSetClientPreference(trip.clientId, assignedDriver!.name)}
+            >
+              ☆ Remember {assignedDriver!.name} for {trip.clientId}
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }

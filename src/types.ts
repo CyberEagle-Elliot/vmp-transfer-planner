@@ -21,6 +21,8 @@ export interface ParsedTripRow {
   numbering: string;
   clientId: string;
   driverName: string; // blank = unassigned
+  /** driver the customer asked for (hard constraint), blank = none */
+  requestedDriverName: string;
   localTimeRaw: string; // original text, e.g. "01/07/2026 14:30"
   localTime: number | null; // epoch ms, or null if unparsed
   from: string;
@@ -53,6 +55,8 @@ export interface Trip {
   tourWindow: TourWindow | null;
   /** manually pre-assigned driver name from the sheet, blank = unassigned */
   presetDriverName: string;
+  /** driver the customer asked for — a hard constraint that beats presets and the auto pool */
+  requestedDriverName: string;
 }
 
 export type MarginColor = "green" | "yellow" | "red";
@@ -96,4 +100,7 @@ export interface AppState {
   assignments: Record<string, Assignment>; // tripId -> Assignment
   distanceCache: Record<string, DistanceCacheEntry>; // key -> entry
   travelOverrides: Record<string, TravelOverride>; // "origin|destination" (normalized) -> override
+  /** Remembered regular drivers: normalized client ID -> driver name.
+   *  A soft preference — honored whenever that driver is feasible. */
+  clientPreferences: Record<string, string>;
 }
