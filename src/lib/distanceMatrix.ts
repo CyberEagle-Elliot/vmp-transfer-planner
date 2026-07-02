@@ -1,5 +1,5 @@
 import type { DistanceCacheEntry, DistanceMatrixResult, TravelOverride } from "../types";
-import { fetchDistanceMatrix, isGoogleMapsConfigured } from "./googleMapsClient";
+import { fetchDistanceMatrix, isGoogleMapsConfigured, reportLiveLookupOk } from "./googleMapsClient";
 import { estimateTravelMinutes } from "./mauritiusEstimator";
 import {
   loadDistanceCache,
@@ -129,6 +129,7 @@ export async function getTravelTime(
       LIVE_LOOKUP_TIMEOUT_MS
     );
     if (raw.statusOk && (raw.durationInTrafficMinutes ?? raw.durationMinutes) != null) {
+      reportLiveLookupOk();
       return writeCache({
         durationMinutes: Math.round(
           (raw.durationInTrafficMinutes ?? raw.durationMinutes) as number

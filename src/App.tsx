@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import type { Assignment, Driver, ParsedTripRow, Trip } from "./types";
 import { classifyTrips } from "./lib/parser";
 import { autoAssign, recomputeDriverLane, normalizeClientId } from "./lib/assignment";
@@ -10,7 +10,7 @@ import {
   saveClientPreferences,
   clearTripsOnly,
 } from "./lib/storage";
-import { isGoogleMapsConfigured } from "./lib/googleMapsClient";
+import { getMapsStatus, subscribeMapsStatus } from "./lib/googleMapsClient";
 import SetupScreen from "./components/SetupScreen";
 import DispatchBoard from "./components/DispatchBoard";
 import TravelTimesPanel from "./components/TravelTimesPanel";
@@ -140,16 +140,29 @@ export default function App() {
     setView("setup");
   }
 
+  const mapsStatus = useSyncExternalStore(subscribeMapsStatus, getMapsStatus);
+  let subtitle: string;
+  let subtitleClass = "subtitle";
+  if (!mapsStatus.configured) {
+    subtitle = "Google Maps key not set — using estimated travel times";
+  } else if (mapsStatus.authFailed) {
+    subtitle = `Google Maps rejected this site${
+      mapsStatus.errorName ? `: ${mapsStatus.errorName}` : ""
+    } — using estimates. Fix the key's website restrictions in Google Cloud Console.`;
+    subtitleClass = "subtitle subtitle-error";
+  } else if (mapsStatus.liveOk) {
+    subtitle = "Live traffic-aware routing ✓";
+    subtitleClass = "subtitle subtitle-ok";
+  } else {
+    subtitle = "Google Maps key set — live check pending first route lookup";
+  }
+
   return (
     <div className="app-shell">
       <header className="app-header">
         <div>
           <h1>VMP Transfer Planner</h1>
-          <div className="subtitle">
-            {isGoogleMapsConfigured()
-              ? "Live traffic-aware routing"
-              : "Google Maps key not set — using estimated travel times"}
-          </div>
+          <div className={subtitleClass}>{subtitle}</div>
         </div>
         <div className="header-actions">
           {view === "board" && (

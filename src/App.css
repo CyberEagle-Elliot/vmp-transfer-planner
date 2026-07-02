@@ -26,6 +26,16 @@
   letter-spacing: 0.04em;
 }
 
+.app-header .subtitle-error {
+  color: var(--accent-red-fg);
+  font-weight: 800;
+}
+
+.app-header .subtitle-ok {
+  color: var(--accent-green-fg);
+  font-weight: 700;
+}
+
 .header-actions {
   display: flex;
   gap: 0.5rem;

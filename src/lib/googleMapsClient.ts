@@ -14,6 +14,52 @@ declare global {
 
 let loadPromise: Promise<void> | null = null;
 let authFailed = false;
+let mapsErrorName: string | null = null;
+let liveLookupOk = false;
+
+export interface MapsStatus {
+  configured: boolean;
+  /** Google rejected the key for this page (bad key, referrer blocked, billing off, ...) */
+  authFailed: boolean;
+  /** The exact Google error name (e.g. "RefererNotAllowedMapError"), when known */
+  errorName: string | null;
+  /** At least one live traffic lookup succeeded this session */
+  liveOk: boolean;
+}
+
+let statusSnapshot: MapsStatus = {
+  configured: isGoogleMapsConfigured(), // function declarations are hoisted
+  authFailed: false,
+  errorName: null,
+  liveOk: false,
+};
+const statusListeners = new Set<() => void>();
+
+function emitStatus(): void {
+  statusSnapshot = {
+    configured: isGoogleMapsConfigured(),
+    authFailed,
+    errorName: mapsErrorName,
+    liveOk: liveLookupOk,
+  };
+  statusListeners.forEach((cb) => cb());
+}
+
+export function getMapsStatus(): MapsStatus {
+  return statusSnapshot;
+}
+
+export function subscribeMapsStatus(cb: () => void): () => void {
+  statusListeners.add(cb);
+  return () => statusListeners.delete(cb);
+}
+
+/** Called by the travel-time layer when a live lookup returns real data. */
+export function reportLiveLookupOk(): void {
+  if (liveLookupOk) return;
+  liveLookupOk = true;
+  emitStatus();
+}
 
 if (typeof window !== "undefined") {
   window.gm_authFailure = () => {
@@ -22,6 +68,22 @@ if (typeof window !== "undefined") {
       "Google Maps rejected the API key for this site (check the key's HTTP referrer " +
         "restrictions). Falling back to estimated travel times."
     );
+    emitStatus();
+  };
+
+  // Google reports the *reason* (RefererNotAllowedMapError, BillingNotEnabledMapError,
+  // ApiNotActivatedMapError, ...) only via console.error — intercept it so the UI can
+  // show the dispatcher exactly what to fix instead of silently serving estimates.
+  const originalConsoleError = console.error.bind(console);
+  console.error = (...args: unknown[]) => {
+    const text = args.map((a) => String(a)).join(" ");
+    const match = text.match(/([A-Za-z]+MapError)/);
+    if (match && mapsErrorName === null) {
+      mapsErrorName = match[1];
+      authFailed = true;
+      emitStatus();
+    }
+    originalConsoleError(...args);
   };
 }
 
