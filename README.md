@@ -96,9 +96,10 @@ Trips are processed in chronological order. Each driver tracks `freeAt`
 (when they're next available) and `lastLocation` (where they'll be).
 
 - **Arrival**: feasible if the driver can reach `MRU AIRPORT` at least 15
-  minutes before landing. On assignment, the driver becomes free 75 minutes
-  after landing (worst-case immigration/baggage) plus the drive time to the
-  drop-off.
+  minutes before landing. On assignment, the driver becomes free after the
+  client-ready wait plus the drive time to the drop-off. The wait depends on
+  the booking `ID`: purely numeric IDs wait **60 minutes** after landing,
+  IDs containing letters wait **75 minutes**.
 - **Departure**: feasible if the driver can reach the pickup address at
   least 15 minutes before pickup time. On assignment, the driver becomes
   free at pickup time plus the drive time back to the airport.

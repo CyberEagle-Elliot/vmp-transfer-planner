@@ -110,6 +110,30 @@ describe("autoAssign", () => {
     expect(result["t1"].reason).toContain("Somebody Else");
   });
 
+  it("waits 60 min after landing for numeric IDs, 75 min for IDs with letters", async () => {
+    // One driver: 10:00 arrival to Hotel A, then a 12:05 departure from Hotel A.
+    // Numeric ID: ready 11:00, done 11:40 (+40 drive), reach pickup 12:00 — fits.
+    // Alpha ID: ready 11:15, done 11:55, reach pickup 12:15 — misses 12:05.
+    const solo = [driver("d1", "Solo")];
+    const makeDay = (clientId: string): Trip[] => {
+      const arr = arrival("t1", at(10));
+      arr.clientId = clientId;
+      const dep: Trip = {
+        ...arrival("t2", at(12, 5)),
+        type: "departure",
+        from: "Hotel A",
+        to: "MRU Airport",
+      };
+      return [arr, dep];
+    };
+
+    const numeric = await autoAssign(solo, makeDay("12345"));
+    expect(numeric["t2"].driverId).toBe("d1");
+
+    const alpha = await autoAssign(solo, makeDay("C12345"));
+    expect(alpha["t2"].driverId).toBeNull();
+  });
+
   it("prefetch covers MRU→hotel, hotel→MRU, and forward hotel→hotel chains", () => {
     const arrivalTrip = arrival("t1", at(10), "Hotel A");
     const departureTrip: Trip = {

@@ -2,8 +2,18 @@ import type { Assignment, Driver, MarginColor, Trip } from "../types";
 import { getTravelTime } from "./distanceMatrix";
 
 export const MRU_AIRPORT = "MRU AIRPORT";
-const CLIENT_READY_BUFFER_MIN = 75; // worst-case immigration/baggage buffer
+/** Immigration/baggage wait after landing, by booking type: client IDs with
+ *  letters wait 75 min; purely numeric IDs clear in 60 min. */
+const CLIENT_READY_BUFFER_ALPHA_MIN = 75;
+const CLIENT_READY_BUFFER_NUMERIC_MIN = 60;
 const TURNAROUND_BUFFER_MIN = 15;
+
+function clientReadyBufferMin(trip: Trip): number {
+  const id = trip.clientId.trim();
+  return id !== "" && /^[0-9]+$/.test(id)
+    ? CLIENT_READY_BUFFER_NUMERIC_MIN
+    : CLIENT_READY_BUFFER_ALPHA_MIN;
+}
 /** Slack above which a connection is considered safe; among these drivers we
  *  optimize for least deadhead + workload balance instead of raw slack. */
 const COMFORTABLE_SLACK_MIN = 30;
@@ -130,7 +140,7 @@ async function checkFeasibility(
   const NO_TRAVEL = { durationMinutes: 0, estimated: false };
 
   if (trip.type === "arrival") {
-    const clientReadyTime = trip.time + minutesToMs(CLIENT_READY_BUFFER_MIN);
+    const clientReadyTime = trip.time + minutesToMs(clientReadyBufferMin(trip));
     const travelToAirport = state.lastLocation
       ? await getTravelTime(state.lastLocation, MRU_AIRPORT, new Date(state.freeAt))
       : NO_TRAVEL;
@@ -265,7 +275,7 @@ function applyAssignment(state: DriverRunState, trip: Trip, feas: FeasibilityRes
   state.tripCount++;
   state.workMinutes += feas.travelToStartMinutes; // deadhead to reach the job
   if (trip.type === "arrival") {
-    const clientReadyTime = trip.time + minutesToMs(CLIENT_READY_BUFFER_MIN);
+    const clientReadyTime = trip.time + minutesToMs(clientReadyBufferMin(trip));
     state.workMinutes += Math.max(0, (feas.completionTime - clientReadyTime) / 60000);
     state.freeAt = feas.completionTime;
     state.lastLocation = trip.to;
@@ -534,7 +544,7 @@ export function buildPrefetchPairs(trips: Trip[]): RoutePair[] {
 
   for (const trip of trips) {
     if (trip.type === "arrival") {
-      const clientReady = trip.time + minutesToMs(CLIENT_READY_BUFFER_MIN);
+      const clientReady = trip.time + minutesToMs(clientReadyBufferMin(trip));
       add(MRU_AIRPORT, trip.to, clientReady); // main leg
       starts.push({ loc: MRU_AIRPORT, time: trip.time }); // deadhead target: reach the airport
       ends.push({ loc: trip.to, time: clientReady }); // driver ends at the drop-off hotel
