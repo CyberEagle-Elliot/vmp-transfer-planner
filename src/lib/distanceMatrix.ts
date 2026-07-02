@@ -104,6 +104,7 @@ export async function getTravelTime(
     // A cached fallback estimate must not block a live lookup once the API is
     // available again — only serve it when live lookups aren't possible anyway.
     if (!cached.estimated || !isGoogleMapsConfigured()) {
+      if (!cached.estimated) reportLiveLookupOk(); // fresh live data proves Maps works
       return withSurplus({ durationMinutes: cached.durationMinutes, estimated: cached.estimated });
     }
   }

@@ -11,6 +11,7 @@ import {
   clearTripsOnly,
 } from "./lib/storage";
 import { getMapsStatus, subscribeMapsStatus } from "./lib/googleMapsClient";
+import { getTravelTime } from "./lib/distanceMatrix";
 import SetupScreen from "./components/SetupScreen";
 import DispatchBoard from "./components/DispatchBoard";
 import TravelTimesPanel from "./components/TravelTimesPanel";
@@ -31,6 +32,18 @@ export default function App() {
   );
   const [view, setView] = useState<View>(initial.trips.length > 0 ? "board" : "setup");
   const [isAssigning, setIsAssigning] = useState(false);
+
+  useEffect(() => {
+    // Startup self-test: fire one route lookup so the header immediately shows
+    // whether Google Maps accepts this site's key, instead of waiting for a re-plan.
+    if (getMapsStatus().configured) {
+      void getTravelTime(
+        "SSR International Airport, Mauritius",
+        "Port Louis, Mauritius",
+        new Date()
+      );
+    }
+  }, []);
 
   useEffect(() => {
     saveRoster(roster);
