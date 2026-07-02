@@ -20,12 +20,6 @@ const CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours — traffic patterns for a g
  *  the Mauritius region estimator can resolve a route. Deliberately conservative. */
 const STATIC_FALLBACK_MINUTES = 45;
 
-/** Safety surplus added on top of every travel time used for planning, so the
- *  schedule absorbs loading, parking, and everyday traffic surprises. Raw times
- *  (as returned by Maps / the estimator / corrections) are what's cached and
- *  shown in the travel-times panel; the surplus is applied at planning time. */
-const SAFETY_SURPLUS_MIN = 15;
-
 /** A live lookup that hasn't answered by then is treated as failed — a broken
  *  key or flaky network must never hang the whole auto-assign run. */
 const LIVE_LOOKUP_TIMEOUT_MS = 8000;
@@ -44,10 +38,6 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
       }
     );
   });
-}
-
-function withSurplus(result: DistanceMatrixResult): DistanceMatrixResult {
-  return { ...result, durationMinutes: result.durationMinutes + SAFETY_SURPLUS_MIN };
 }
 
 function fallbackEstimate(origin: string, destination: string): DistanceMatrixResult {
@@ -86,16 +76,16 @@ export async function getTravelTime(
   const trimmedDestination = destination.trim();
 
   if (!trimmedOrigin || !trimmedDestination) {
-    return withSurplus({ durationMinutes: STATIC_FALLBACK_MINUTES, estimated: true });
+    return { durationMinutes: STATIC_FALLBACK_MINUTES, estimated: true };
   }
   if (normalizeLocation(trimmedOrigin) === normalizeLocation(trimmedDestination)) {
-    return withSurplus({ durationMinutes: 5, estimated: false });
+    return { durationMinutes: 5, estimated: false };
   }
 
   // A dispatcher correction for this route always wins
   const override = manualOverrides[routeKey(trimmedOrigin, trimmedDestination)];
   if (override) {
-    return withSurplus({ durationMinutes: override.durationMinutes, estimated: false });
+    return { durationMinutes: override.durationMinutes, estimated: false };
   }
 
   const key = cacheKey(trimmedOrigin, trimmedDestination, departureTime);
@@ -105,7 +95,7 @@ export async function getTravelTime(
     // available again — only serve it when live lookups aren't possible anyway.
     if (!cached.estimated || !isGoogleMapsConfigured()) {
       if (!cached.estimated) reportLiveLookupOk(); // fresh live data proves Maps works
-      return withSurplus({ durationMinutes: cached.durationMinutes, estimated: cached.estimated });
+      return { durationMinutes: cached.durationMinutes, estimated: cached.estimated };
     }
   }
 
@@ -117,7 +107,7 @@ export async function getTravelTime(
       destination: trimmedDestination,
     };
     persistCache();
-    return withSurplus(result);
+    return result;
   };
 
   if (!isGoogleMapsConfigured()) {

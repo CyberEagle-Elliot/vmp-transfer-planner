@@ -175,7 +175,9 @@ new driver's lanes, without re-solving the rest of the day.
 
 The **Travel times** panel at the top of the dispatch board lists every
 route the planner has used today, with its source: *Live traffic*,
-*Estimated* (static fallback), or *Corrected* (yours). If a duration looks
+*Estimated* (static fallback), or *Corrected* (yours). Routes only appear
+once the planner has needed them — use the **Check route** box to look up
+any pair on demand (e.g. hotel to hotel); the result joins the list. If a duration looks
 wrong — the API is optimistic about a mountain road, or the fallback
 estimate is way off — type the real minutes and hit **Apply & re-plan**.
 The whole day is re-planned with your corrected times (manual placements
@@ -190,11 +192,6 @@ Every origin→destination lookup passes `departure_time` so
 airport↔hotel pairs repeat many times a day. Cached fallback estimates are
 ignored as soon as live lookups are possible again, so a temporary API
 failure can't lock in wrong times for the day.
-
-**Safety surplus**: planning adds a flat **15 minutes** on top of every
-travel leg (live, estimated, or corrected) to absorb loading, parking, and
-everyday traffic surprises. The travel-times panel shows the raw driving
-times.
 
 **No API key / lookup failed**: instead of one flat estimate for the whole
 island, the app recognizes the locality in each address (Grand Baie,

@@ -183,6 +183,26 @@
   background: var(--paper);
 }
 
+.route-check {
+  display: flex;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.75rem;
+}
+
+.route-check input {
+  flex: 1 1 220px;
+  min-height: 40px;
+  font-size: 0.85rem;
+  padding: 0.3em 0.5em;
+}
+
+.route-check-result {
+  font-size: 0.85rem;
+  font-weight: 700;
+  margin-bottom: 0.75rem;
+}
+
 .travel-panel-hint {
   font-size: 0.82rem;
   color: var(--muted);

@@ -3,6 +3,7 @@ import {
   listKnownRoutes,
   setTravelOverride,
   clearTravelOverride,
+  getTravelTime,
   type KnownRoute,
   type RouteSource,
 } from "../lib/distanceMatrix";
@@ -26,6 +27,10 @@ export default function TravelTimesPanel({ onOverridesApplied, isAssigning }: Pr
   const [open, setOpen] = useState(false);
   const [routes, setRoutes] = useState<KnownRoute[]>([]);
   const [edits, setEdits] = useState<Record<string, string>>({});
+  const [checkFrom, setCheckFrom] = useState("");
+  const [checkTo, setCheckTo] = useState("");
+  const [checking, setChecking] = useState(false);
+  const [checkResult, setCheckResult] = useState<string | null>(null);
 
   function refresh() {
     setRoutes(listKnownRoutes());
@@ -59,6 +64,26 @@ export default function TravelTimesPanel({ onOverridesApplied, isAssigning }: Pr
     onOverridesApplied();
   }
 
+  // On-demand lookup for any pair (e.g. hotel to hotel) that today's plan
+  // hasn't needed yet — the result is cached and joins the list below.
+  async function checkRoute() {
+    const from = checkFrom.trim();
+    const to = checkTo.trim();
+    if (!from || !to) return;
+    setChecking(true);
+    setCheckResult(null);
+    try {
+      const result = await getTravelTime(from, to, new Date());
+      setCheckResult(
+        `${from} → ${to}: ${result.durationMinutes} min ` +
+          (result.estimated ? "(estimated)" : "(live traffic)")
+      );
+      setRoutes(listKnownRoutes());
+    } finally {
+      setChecking(false);
+    }
+  }
+
   return (
     <div className="travel-panel">
       <button type="button" className="ghost travel-panel-toggle" onClick={toggle}>
@@ -67,19 +92,42 @@ export default function TravelTimesPanel({ onOverridesApplied, isAssigning }: Pr
 
       {open && (
         <div className="travel-panel-body">
+          <div className="route-check">
+            <input
+              type="text"
+              placeholder="From (e.g. LUX Belle Mare)"
+              value={checkFrom}
+              onChange={(e) => setCheckFrom(e.target.value)}
+              aria-label="Check route from"
+            />
+            <input
+              type="text"
+              placeholder="To (e.g. Royal Palm, Grand Baie)"
+              value={checkTo}
+              onChange={(e) => setCheckTo(e.target.value)}
+              aria-label="Check route to"
+            />
+            <button
+              type="button"
+              className="ghost"
+              onClick={checkRoute}
+              disabled={checking || !checkFrom.trim() || !checkTo.trim()}
+            >
+              {checking ? "Checking…" : "Check route"}
+            </button>
+          </div>
+          {checkResult && <p className="route-check-result">{checkResult}</p>}
+
           {routes.length === 0 ? (
             <p className="empty-state">
-              No routes looked up yet — run auto-assign first, then correct any travel
-              time that looks wrong here.
+              No routes looked up yet — run auto-assign, or check any route above.
             </p>
           ) : (
             <>
               <p className="travel-panel-hint">
                 Fix any duration that doesn't match reality, then apply — the day is
                 re-planned with your corrections (manual placements stay put).
-                Corrections are remembered for future days. Times shown are raw
-                driving times; planning automatically adds a 15 min safety surplus
-                on top of every leg.
+                Corrections are remembered for future days.
               </p>
               <table className="travel-table">
                 <thead>
