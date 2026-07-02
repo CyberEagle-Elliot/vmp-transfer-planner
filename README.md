@@ -107,10 +107,20 @@ Drivers with a shift start/end are only feasible if the trip starts at or
 after `shiftStart` and finishes at or before `shiftEnd` — this is checked
 even if the routing math would otherwise work.
 
-Among feasible drivers, the trip goes to whichever has the **largest
-slack** (most spare time before the trip), to spread tight connections
-across the fleet instead of stacking them on one driver. If no driver is
-feasible, the trip is marked **UNASSIGNED** — the app never double-books.
+Rows with a `Driver` name already filled in on the sheet are **locked to
+that driver** (matched against the roster case-insensitively) before the
+auto pool is considered. If the preset is tight or infeasible the trip is
+still assigned to that driver, flagged red with a warning; if the name
+isn't in the roster the trip lands in the unassigned lane with a clear
+reason.
+
+Among feasible drivers, drivers with a **comfortable margin** (≥ 30 min
+slack) are preferred by **least deadhead** — whoever is already closest to
+the pickup — tie-broken by fewest trips so far so workload spreads across
+the fleet. If nobody has a comfortable margin, the trip goes to the driver
+with the **largest slack** (the safest hands for a tight connection). If no
+driver is feasible, the trip is marked **UNASSIGNED** with the closest
+miss's reason shown — the app never double-books.
 
 Margin badges use the stricter of the routing slack and the headroom
 before a shift end: green > 30 min, yellow 10–30 min, red < 10 min (or

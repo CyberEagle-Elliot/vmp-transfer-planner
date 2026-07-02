@@ -4,6 +4,9 @@ import { getTravelTime } from "./distanceMatrix";
 export const MRU_AIRPORT = "MRU AIRPORT";
 const CLIENT_READY_BUFFER_MIN = 75; // worst-case immigration/baggage buffer
 const TURNAROUND_BUFFER_MIN = 15;
+/** Slack above which a connection is considered safe; among these drivers we
+ *  optimize for least deadhead + workload balance instead of raw slack. */
+const COMFORTABLE_SLACK_MIN = 30;
 
 function minutesToMs(min: number): number {
   return min * 60 * 1000;
@@ -24,6 +27,7 @@ interface DriverRunState {
   freeAt: number; // epoch ms
   lastLocation: string;
   tourWindows: { startTime: number; endTime: number }[];
+  tripCount: number;
 }
 
 function initDriverStates(drivers: Driver[], anchorDayStart: number): Map<string, DriverRunState> {
@@ -38,9 +42,14 @@ function initDriverStates(drivers: Driver[], anchorDayStart: number): Map<string
       freeAt,
       lastLocation: "base",
       tourWindows: [],
+      tripCount: 0,
     });
   }
   return map;
+}
+
+function normalizeDriverName(name: string): string {
+  return name.trim().toLowerCase().replace(/\s+/g, " ");
 }
 
 function isWithinShiftStart(driver: Driver, dayStart: number, tripTime: number): boolean {
@@ -245,11 +254,10 @@ async function checkFeasibility(
 }
 
 function applyAssignment(state: DriverRunState, trip: Trip, feas: FeasibilityResult): void {
+  state.tripCount++;
   if (trip.type === "arrival") {
-    const clientReadyTime = trip.time + minutesToMs(CLIENT_READY_BUFFER_MIN);
     state.freeAt = feas.completionTime;
     state.lastLocation = trip.to;
-    void clientReadyTime;
   } else if (trip.type === "departure") {
     state.freeAt = feas.completionTime;
     state.lastLocation = MRU_AIRPORT;
@@ -263,7 +271,67 @@ function applyAssignment(state: DriverRunState, trip: Trip, feas: FeasibilityRes
   }
 }
 
-/** Runs the full auto-assign algorithm from scratch over all trips, in chronological order. */
+function buildAssignment(
+  trip: Trip,
+  driver: Driver,
+  feas: FeasibilityResult,
+  dayStart: number
+): Assignment {
+  const shiftHeadroom = shiftHeadroomMinutes(driver, dayStart, feas.completionTime);
+  const finalSlack = Math.min(feas.routingSlackMinutes, shiftHeadroom);
+  return {
+    tripId: trip.id,
+    driverId: driver.id,
+    slackMinutes: Number.isFinite(finalSlack) ? Math.round(finalSlack) : null,
+    color: colorFor(Number.isFinite(finalSlack) ? finalSlack : null),
+    reason: "",
+    estimated: feas.estimated,
+    manualOverride: false,
+  };
+}
+
+function unassignedAssignment(trip: Trip, reason: string): Assignment {
+  return {
+    tripId: trip.id,
+    driverId: null,
+    slackMinutes: null,
+    color: "red",
+    reason,
+    estimated: false,
+    manualOverride: false,
+  };
+}
+
+/** Picks the winner among feasible drivers. Drivers with comfortable slack are
+ *  preferred by least deadhead (travel to the pickup), tie-broken by fewest trips
+ *  so the workload spreads across the fleet, then by slack. If nobody is
+ *  comfortable, the largest slack wins — the safest hands for a tight connection. */
+function pickBestDriver(
+  candidates: { driver: Driver; feas: FeasibilityResult }[],
+  states: Map<string, DriverRunState>
+): { driver: Driver; feas: FeasibilityResult } {
+  const comfortable = candidates.filter(
+    (c) => c.feas.routingSlackMinutes >= COMFORTABLE_SLACK_MIN
+  );
+  if (comfortable.length === 0) {
+    return candidates.reduce((best, c) =>
+      c.feas.routingSlackMinutes > best.feas.routingSlackMinutes ? c : best
+    );
+  }
+  return comfortable.reduce((best, c) => {
+    if (c.feas.travelToStartMinutes !== best.feas.travelToStartMinutes) {
+      return c.feas.travelToStartMinutes < best.feas.travelToStartMinutes ? c : best;
+    }
+    const cCount = states.get(c.driver.id)!.tripCount;
+    const bestCount = states.get(best.driver.id)!.tripCount;
+    if (cCount !== bestCount) return cCount < bestCount ? c : best;
+    return c.feas.routingSlackMinutes > best.feas.routingSlackMinutes ? c : best;
+  });
+}
+
+/** Runs the full auto-assign algorithm from scratch over all trips, in chronological order.
+ *  Trips with a Driver name already on the sheet are locked to that driver (assigned even
+ *  if tight/infeasible, with a visible warning) before the auto pool is considered. */
 export async function autoAssign(
   drivers: Driver[],
   trips: Trip[]
@@ -273,54 +341,70 @@ export async function autoAssign(
   const states = initDriverStates(drivers, dayStart);
   const assignments: Record<string, Assignment> = {};
 
+  const driversByName = new Map<string, Driver>();
+  for (const driver of drivers) {
+    driversByName.set(normalizeDriverName(driver.name), driver);
+  }
+
   for (const trip of orderedTrips) {
-    let best: { driverId: string; feas: FeasibilityResult } | null = null;
-
-    for (const driver of drivers) {
-      const state = states.get(driver.id)!;
+    // Preset driver from the sheet wins over the auto pool
+    const presetName = trip.presetDriverName.trim();
+    if (presetName) {
+      const preset = driversByName.get(normalizeDriverName(presetName));
+      if (!preset) {
+        assignments[trip.id] = unassignedAssignment(
+          trip,
+          `Sheet assigns "${presetName}", who is not in the roster`
+        );
+        continue;
+      }
+      const state = states.get(preset.id)!;
       const feas = await checkFeasibility(trip, state, dayStart);
-      if (!feas.feasible) continue;
-      if (!best || feas.routingSlackMinutes > best.feas.routingSlackMinutes) {
-        best = { driverId: driver.id, feas };
+      applyAssignment(state, trip, feas);
+      if (feas.feasible) {
+        assignments[trip.id] = buildAssignment(trip, preset, feas, dayStart);
+      } else {
+        assignments[trip.id] = {
+          tripId: trip.id,
+          driverId: preset.id,
+          slackMinutes: null,
+          color: "red",
+          reason: feas.reason ?? `Not feasible for ${preset.name} (preset on sheet)`,
+          estimated: feas.estimated,
+          manualOverride: false,
+        };
       }
-    }
-
-    if (!best) {
-      // Collect a representative reason from the closest-miss driver, if any drivers exist
-      let reason = "No driver available";
-      if (drivers.length > 0) {
-        const state = states.get(drivers[0].id)!;
-        const feas = await checkFeasibility(trip, state, dayStart);
-        reason = feas.reason ?? reason;
-      }
-      assignments[trip.id] = {
-        tripId: trip.id,
-        driverId: null,
-        slackMinutes: null,
-        color: "red",
-        reason,
-        estimated: false,
-        manualOverride: false,
-      };
       continue;
     }
 
-    const state = states.get(best.driverId)!;
-    applyAssignment(state, trip, best.feas);
+    // Check every driver in parallel — feasibility is read-only over states
+    const results = await Promise.all(
+      drivers.map(async (driver) => ({
+        driver,
+        feas: await checkFeasibility(trip, states.get(driver.id)!, dayStart),
+      }))
+    );
+    const feasible = results.filter((r) => r.feas.feasible);
 
-    const driver = drivers.find((d) => d.id === best!.driverId)!;
-    const shiftHeadroom = shiftHeadroomMinutes(driver, dayStart, best.feas.completionTime);
-    const finalSlack = Math.min(best.feas.routingSlackMinutes, shiftHeadroom);
+    if (feasible.length === 0) {
+      // Report the closest miss: the driver who came nearest to making it
+      let closest: { driver: Driver; feas: FeasibilityResult } | null = null;
+      for (const r of results) {
+        if (!r.feas.reason) continue;
+        if (!closest || r.feas.routingSlackMinutes > closest.feas.routingSlackMinutes) {
+          closest = r;
+        }
+      }
+      assignments[trip.id] = unassignedAssignment(
+        trip,
+        closest?.feas.reason ?? "No driver available"
+      );
+      continue;
+    }
 
-    assignments[trip.id] = {
-      tripId: trip.id,
-      driverId: best.driverId,
-      slackMinutes: Number.isFinite(finalSlack) ? Math.round(finalSlack) : null,
-      color: colorFor(Number.isFinite(finalSlack) ? finalSlack : null),
-      reason: "",
-      estimated: best.feas.estimated,
-      manualOverride: false,
-    };
+    const best = pickBestDriver(feasible, states);
+    applyAssignment(states.get(best.driver.id)!, trip, best.feas);
+    assignments[trip.id] = buildAssignment(trip, best.driver, best.feas, dayStart);
   }
 
   return assignments;
@@ -343,6 +427,7 @@ export async function recomputeDriverLane(
     freeAt: driver.shiftStart !== null ? shiftMinutesToTimestamp(dayStart, driver.shiftStart) : dayStart,
     lastLocation: "base",
     tourWindows: [],
+    tripCount: 0,
   };
 
   const updated: Record<string, Assignment> = { ...existingAssignments };
@@ -369,18 +454,7 @@ export async function recomputeDriverLane(
     }
 
     applyAssignment(state, trip, feas);
-    const shiftHeadroom = shiftHeadroomMinutes(driver, dayStart, feas.completionTime);
-    const finalSlack = Math.min(feas.routingSlackMinutes, shiftHeadroom);
-
-    updated[trip.id] = {
-      tripId: trip.id,
-      driverId: driver.id,
-      slackMinutes: Number.isFinite(finalSlack) ? Math.round(finalSlack) : null,
-      color: colorFor(Number.isFinite(finalSlack) ? finalSlack : null),
-      reason: "",
-      estimated: feas.estimated,
-      manualOverride,
-    };
+    updated[trip.id] = { ...buildAssignment(trip, driver, feas, dayStart), manualOverride };
   }
 
   return updated;
