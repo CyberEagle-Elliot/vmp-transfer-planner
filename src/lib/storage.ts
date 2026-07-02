@@ -46,7 +46,14 @@ export function saveRoster(roster: Driver[]): void {
 }
 
 export function loadTrips(): Trip[] {
-  return readJSON<Trip[]>(KEYS.trips, []);
+  // Trips saved by older versions may miss fields added since; default them
+  // so string methods on them don't crash the board.
+  return readJSON<Trip[]>(KEYS.trips, []).map((t) => ({
+    ...t,
+    clientId: t.clientId ?? "",
+    presetDriverName: t.presetDriverName ?? "",
+    requestedDriverName: t.requestedDriverName ?? "",
+  }));
 }
 export function saveTrips(trips: Trip[]): void {
   writeJSON(KEYS.trips, trips);

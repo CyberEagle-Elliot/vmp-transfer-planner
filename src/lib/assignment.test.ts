@@ -10,6 +10,10 @@ vi.mock("./distanceMatrix", () => ({
       "base|hotel a": 30,
       "mru airport|hotel a": 40,
       "hotel a|mru airport": 40,
+      "mru airport|far hotel": 120,
+      "far hotel|near hotel": 120,
+      "base|near hotel": 20,
+      "near hotel|mru airport": 45,
     };
     if (origin.toLowerCase().trim() === destination.toLowerCase().trim()) {
       return { durationMinutes: 5, estimated: false };
@@ -152,6 +156,44 @@ describe("autoAssign", () => {
     const result = await autoAssign([rajesh, kevin], [trip], {}, { c100: "Kevin" });
     expect(result["t1"].driverId).toBe("d2");
     expect(result["t1"].reason).toBe("");
+  });
+
+  it("rescues an uncovered trip by moving one trip to a colleague", async () => {
+    // Greedy gives the 10:00 far-hotel arrival to A (first in a tie). That leaves
+    // the 13:30 near-hotel departure impossible: A is stuck far away until 13:15,
+    // and B's shift ends at 14:00 — before the departure would finish (14:15).
+    // The rescue pass must discover the swap: B takes the arrival (done 13:15,
+    // inside shift), freeing A for the departure.
+    const a = driver("d1", "A");
+    const b: Driver = { ...driver("d2", "B"), shiftEnd: 14 * 60 };
+    const farArrival = arrival("t1", at(10), "Far Hotel");
+    const nearDeparture: Trip = {
+      ...arrival("t2", at(13, 30)),
+      type: "departure",
+      from: "Near Hotel",
+      to: "MRU Airport",
+    };
+    const result = await autoAssign([a, b], [farArrival, nearDeparture]);
+    expect(result["t1"].driverId).toBe("d2");
+    expect(result["t2"].driverId).toBe("d1");
+  });
+
+  it("never moves locked trips during a rescue", async () => {
+    // Same shape as the rescue scenario, but the far arrival is a customer
+    // request for A — so the swap is forbidden and the departure stays uncovered.
+    const a = driver("d1", "A");
+    const b: Driver = { ...driver("d2", "B"), shiftEnd: 14 * 60 };
+    const farArrival = arrival("t1", at(10), "Far Hotel");
+    farArrival.requestedDriverName = "A";
+    const nearDeparture: Trip = {
+      ...arrival("t2", at(13, 30)),
+      type: "departure",
+      from: "Near Hotel",
+      to: "MRU Airport",
+    };
+    const result = await autoAssign([a, b], [farArrival, nearDeparture]);
+    expect(result["t1"].driverId).toBe("d1"); // request honored
+    expect(result["t2"].driverId).toBeNull(); // not rescued at the customer's expense
   });
 
   it("falls back with a note when the regular driver isn't available", async () => {

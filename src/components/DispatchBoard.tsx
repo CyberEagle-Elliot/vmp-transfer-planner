@@ -30,8 +30,40 @@ export default function DispatchBoard({
     );
   }
 
+  const assigned = sortedTrips.filter((t) => assignments[t.id]?.driverId);
+  const redCount = assigned.filter((t) => assignments[t.id]?.color === "red").length;
+  const yellowCount = assigned.filter((t) => assignments[t.id]?.color === "yellow").length;
+  const warningCount = assigned.filter((t) => assignments[t.id]?.reason).length;
+
   return (
-    <div className="board">
+    <>
+      <div className="board-summary">
+        <span className="stat">
+          <strong>{sortedTrips.length}</strong> trips
+        </span>
+        <span className={`stat ${unassigned.length > 0 ? "stat-red" : "stat-green"}`}>
+          <strong>{unassigned.length}</strong> need a driver
+        </span>
+        <span className={`stat ${redCount > 0 ? "stat-red" : ""}`}>
+          <strong>{redCount}</strong> critical (&lt;10 min)
+        </span>
+        <span className={`stat ${yellowCount > 0 ? "stat-yellow" : ""}`}>
+          <strong>{yellowCount}</strong> tight (10–30 min)
+        </span>
+        <span className={`stat ${warningCount > 0 ? "stat-yellow" : ""}`}>
+          <strong>{warningCount}</strong> warning{warningCount === 1 ? "" : "s"}
+        </span>
+        <span className="stat-divider" />
+        {drivers.map((driver) => {
+          const count = assigned.filter((t) => assignments[t.id]?.driverId === driver.id).length;
+          return (
+            <span key={driver.id} className="stat driver-load">
+              {driver.name} <strong>{count}</strong>
+            </span>
+          );
+        })}
+      </div>
+      <div className="board">
       <div className="lane unassigned-lane">
         <div className="lane-header">
           <h3>Needs driver</h3>
@@ -66,6 +98,7 @@ export default function DispatchBoard({
           onSetClientPreference={onSetClientPreference}
         />
       ))}
-    </div>
+      </div>
+    </>
   );
 }

@@ -202,6 +202,46 @@
   font-size: 0.75rem;
 }
 
+/* Day-overview summary strip */
+.board-summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem 1rem;
+  border: 2px solid var(--ink);
+  padding: 0.55rem 0.9rem;
+  margin-bottom: 1rem;
+  font-size: 0.82rem;
+}
+
+.board-summary .stat strong {
+  font-variant-numeric: tabular-nums;
+}
+
+.board-summary .stat-red {
+  color: var(--accent-red-fg);
+  font-weight: 700;
+}
+
+.board-summary .stat-yellow {
+  color: var(--accent-yellow-fg);
+  font-weight: 700;
+}
+
+.board-summary .stat-green {
+  color: var(--accent-green-fg);
+}
+
+.board-summary .stat-divider {
+  flex: 0 0 2px;
+  align-self: stretch;
+  background: var(--line);
+}
+
+.board-summary .driver-load {
+  color: var(--muted);
+}
+
 /* Dispatch board */
 .board {
   display: flex;

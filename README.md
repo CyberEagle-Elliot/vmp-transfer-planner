@@ -146,9 +146,21 @@ with the **largest slack**. If no driver is feasible, the trip is marked
 **UNASSIGNED** with the closest miss's reason shown — the app never
 double-books.
 
+**Rescue pass.** The chronological sweep is deliberately greedy, so after it
+finishes, any trip left uncovered triggers a repair search: the planner
+looks for a single reshuffle — move one auto-placed trip from a driver to a
+colleague — that frees someone up for the uncovered trip. A rescue only
+commits if the whole reshuffle is feasible and no healthy trip turns
+infeasible. Customer requests, sheet presets, and manual placements are
+never moved by a rescue.
+
 **Re-running keeps your decisions.** "Re-run auto-assign" (and the re-plan
 after a travel-time correction) pins every trip you placed manually via the
 Reassign dropdown, and re-optimizes only the rest of the day around them.
+
+**Day overview.** A summary strip above the lanes shows totals at a glance:
+trip count, how many still need a driver, critical (<10 min) and tight
+(10–30 min) margins, warnings, and each driver's trip load.
 
 Margin badges use the stricter of the routing slack and the headroom
 before a shift end: green > 30 min, yellow 10–30 min, red < 10 min (or

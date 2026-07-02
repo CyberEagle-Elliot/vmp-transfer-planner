@@ -345,6 +345,123 @@ function pickBestDriver(
   });
 }
 
+interface LaneSim {
+  /** true when every trip the caller requires to be feasible came out feasible */
+  ok: boolean;
+  assignments: Record<string, Assignment>;
+}
+
+/** Replays a hypothetical lane for one driver from scratch, chronologically.
+ *  `mustBeFeasible` lets the caller tolerate trips that were already infeasible
+ *  before (e.g. a forced manual pin) while insisting the rest stay healthy. */
+async function simulateLane(
+  driver: Driver,
+  laneTrips: Trip[],
+  dayStart: number,
+  mustBeFeasible: (tripId: string) => boolean
+): Promise<LaneSim> {
+  const ordered = [...laneTrips].sort((a, b) => a.time - b.time);
+  const state: DriverRunState = {
+    driver,
+    freeAt:
+      driver.shiftStart !== null ? shiftMinutesToTimestamp(dayStart, driver.shiftStart) : dayStart,
+    lastLocation: "base",
+    tourWindows: [],
+    tripCount: 0,
+  };
+  const result: Record<string, Assignment> = {};
+  let ok = true;
+
+  for (const trip of ordered) {
+    const feas = await checkFeasibility(trip, state, dayStart);
+    applyAssignment(state, trip, feas);
+    if (feas.feasible) {
+      result[trip.id] = buildAssignment(trip, driver, feas, dayStart);
+    } else {
+      if (mustBeFeasible(trip.id)) ok = false;
+      result[trip.id] = {
+        tripId: trip.id,
+        driverId: driver.id,
+        slackMinutes: null,
+        color: "red",
+        reason: feas.reason ?? "Not feasible for this driver",
+        estimated: feas.estimated,
+        manualOverride: false,
+      };
+    }
+  }
+  return { ok, assignments: result };
+}
+
+/** Repair pass for trips the greedy sweep couldn't cover: tries to free up a
+ *  driver by moving exactly one of their auto-placed trips to a colleague.
+ *  A rescue only commits when the whole reshuffle is feasible — the uncovered
+ *  trip gets a driver, the moved trip stays covered, and no healthy trip on
+ *  either lane turns infeasible. Locked trips (customer requests, sheet
+ *  presets, manual pins) are never moved. Mutates `assignments` in place. */
+async function rescueUnassigned(
+  drivers: Driver[],
+  trips: Trip[],
+  assignments: Record<string, Assignment>,
+  dayStart: number
+): Promise<void> {
+  const laneOf = (driverId: string) =>
+    trips.filter((t) => assignments[t.id]?.driverId === driverId);
+  const isLocked = (t: Trip) =>
+    t.requestedDriverName.trim() !== "" ||
+    t.presetDriverName.trim() !== "" ||
+    (assignments[t.id]?.manualOverride ?? false);
+
+  const rescuable = trips
+    .filter((t) => assignments[t.id]?.driverId === null && !isLocked(t))
+    .sort((a, b) => a.time - b.time);
+
+  const commitLane = (sim: LaneSim) => {
+    for (const [id, a] of Object.entries(sim.assignments)) {
+      assignments[id] = { ...a, manualOverride: assignments[id]?.manualOverride ?? false };
+    }
+  };
+  // Trips that are currently healthy must stay healthy after a reshuffle
+  const stillHealthy = (extraId: string) => (tripId: string) =>
+    tripId === extraId || assignments[tripId]?.slackMinutes !== null;
+
+  for (const uncovered of rescuable) {
+    let rescued = false;
+    for (const overloaded of drivers) {
+      const lane = laneOf(overloaded.id);
+      for (const moved of lane) {
+        if (isLocked(moved)) continue;
+        const laneWithoutMoved = lane.filter((t) => t.id !== moved.id).concat(uncovered);
+        const simFreed = await simulateLane(
+          overloaded,
+          laneWithoutMoved,
+          dayStart,
+          stillHealthy(uncovered.id)
+        );
+        if (!simFreed.ok) continue;
+
+        for (const colleague of drivers) {
+          if (colleague.id === overloaded.id) continue;
+          const simColleague = await simulateLane(
+            colleague,
+            laneOf(colleague.id).concat(moved),
+            dayStart,
+            stillHealthy(moved.id)
+          );
+          if (!simColleague.ok) continue;
+
+          commitLane(simFreed);
+          commitLane(simColleague);
+          rescued = true;
+          break;
+        }
+        if (rescued) break;
+      }
+      if (rescued) break;
+    }
+  }
+}
+
 /** Assigns a trip to a specific driver no matter what (sheet preset or pinned manual
  *  override), advancing the driver's timeline and flagging infeasibility as a warning. */
 async function assignLocked(
@@ -490,6 +607,10 @@ export async function autoAssign(
     }
     assignments[trip.id] = assignment;
   }
+
+  // The greedy sweep is myopic: an early comfortable assignment can make a later
+  // trip impossible for everyone. Try single-move reshuffles to cover the leftovers.
+  await rescueUnassigned(drivers, orderedTrips, assignments, dayStart);
 
   return assignments;
 }
