@@ -45,6 +45,9 @@ function arrival(id: string, timeMs: number, to = "Hotel A"): Trip {
     tourWindow: null,
     presetDriverName: "",
     requestedDriverName: "",
+    passengerName: "",
+    passengerContact: "",
+    amount: null,
   };
 }
 

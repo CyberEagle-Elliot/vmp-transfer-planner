@@ -22,6 +22,8 @@ function buildMessage(driver: Driver, trips: Trip[], assignments: Record<string,
 
   for (const trip of mine) {
     lines.push(`${formatTime(trip.time)} — ${tripTypeLabel(trip.type)}`);
+    if (trip.passengerName) lines.push(`Passenger: ${trip.passengerName}`);
+    if (trip.passengerContact) lines.push(`Contact: ${trip.passengerContact}`);
     lines.push(`Pickup: ${trip.from || "—"}`);
     lines.push(`Drop-off: ${trip.to || "—"}`);
     if (trip.flightNumber) lines.push(`Flight: ${trip.flightNumber}`);

@@ -54,6 +54,8 @@ export default function TripCard({
         </span>
       </div>
 
+      {trip.passengerName && <div className="trip-passenger">{trip.passengerName}</div>}
+
       <div className="trip-route">
         {tripTypeLabel(trip.type)} · {trip.from || "—"} → {trip.to || "—"}
       </div>

@@ -23,6 +23,10 @@ export interface ParsedTripRow {
   driverName: string; // blank = unassigned
   /** driver the customer asked for (hard constraint), blank = none */
   requestedDriverName: string;
+  passengerName: string;
+  passengerContact: string;
+  /** booking amount as text from the sheet, e.g. "23.01" */
+  amountRaw: string;
   localTimeRaw: string; // original text, e.g. "01/07/2026 14:30"
   localTime: number | null; // epoch ms, or null if unparsed
   from: string;
@@ -57,6 +61,10 @@ export interface Trip {
   presetDriverName: string;
   /** driver the customer asked for — a hard constraint that beats presets and the auto pool */
   requestedDriverName: string;
+  passengerName: string;
+  passengerContact: string;
+  /** booking amount (revenue), null when the sheet has none */
+  amount: number | null;
 }
 
 export type MarginColor = "green" | "yellow" | "red";

@@ -466,10 +466,6 @@ async function rescueUnassigned(
     t.presetDriverName.trim() !== "" ||
     (assignments[t.id]?.manualOverride ?? false);
 
-  const rescuable = trips
-    .filter((t) => assignments[t.id]?.driverId === null && !isLocked(t))
-    .sort((a, b) => a.time - b.time);
-
   const commitLane = (sim: LaneSim) => {
     for (const [id, a] of Object.entries(sim.assignments)) {
       assignments[id] = { ...a, manualOverride: assignments[id]?.manualOverride ?? false };
@@ -479,42 +475,54 @@ async function rescueUnassigned(
   const stillHealthy = (extraId: string) => (tripId: string) =>
     tripId === extraId || assignments[tripId]?.slackMinutes !== null;
 
-  for (const uncovered of rescuable) {
-    let rescued = false;
-    for (const overloaded of drivers) {
-      const lane = laneOf(overloaded.id);
-      for (const moved of lane) {
-        if (isLocked(moved)) continue;
-        const laneWithoutMoved = lane.filter((t) => t.id !== moved.id).concat(uncovered);
-        const simFreed = await simulateLane(
-          overloaded,
-          laneWithoutMoved,
-          dayStart,
-          stillHealthy(uncovered.id),
-          waitMode
-        );
-        if (!simFreed.ok) continue;
+  // One successful rescue can unblock another — sweep until nothing improves.
+  for (let sweep = 0; sweep < 3; sweep++) {
+    const rescuable = trips
+      .filter((t) => assignments[t.id]?.driverId === null && !isLocked(t))
+      .sort((a, b) => a.time - b.time);
+    if (rescuable.length === 0) return;
+    let rescuedAny = false;
 
-        for (const colleague of drivers) {
-          if (colleague.id === overloaded.id) continue;
-          const simColleague = await simulateLane(
-            colleague,
-            laneOf(colleague.id).concat(moved),
+    for (const uncovered of rescuable) {
+      let rescued = false;
+      for (const overloaded of drivers) {
+        const lane = laneOf(overloaded.id);
+        for (const moved of lane) {
+          if (isLocked(moved)) continue;
+          const laneWithoutMoved = lane.filter((t) => t.id !== moved.id).concat(uncovered);
+          const simFreed = await simulateLane(
+            overloaded,
+            laneWithoutMoved,
             dayStart,
-            stillHealthy(moved.id),
+            stillHealthy(uncovered.id),
             waitMode
           );
-          if (!simColleague.ok) continue;
+          if (!simFreed.ok) continue;
 
-          commitLane(simFreed);
-          commitLane(simColleague);
-          rescued = true;
-          break;
+          for (const colleague of drivers) {
+            if (colleague.id === overloaded.id) continue;
+            const simColleague = await simulateLane(
+              colleague,
+              laneOf(colleague.id).concat(moved),
+              dayStart,
+              stillHealthy(moved.id),
+              waitMode
+            );
+            if (!simColleague.ok) continue;
+
+            commitLane(simFreed);
+            commitLane(simColleague);
+            rescued = true;
+            break;
+          }
+          if (rescued) break;
         }
         if (rescued) break;
       }
-      if (rescued) break;
+      if (rescued) rescuedAny = true;
     }
+
+    if (!rescuedAny) return;
   }
 }
 

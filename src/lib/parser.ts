@@ -17,6 +17,9 @@ const HEADER_ALIASES: Record<string, string[]> = {
   localTime: ["local time", "localtime", "time"],
   from: ["from"],
   to: ["to"],
+  passengerName: ["passenger name", "passenger", "client name", "pax", "guest"],
+  passengerContact: ["passenger contact", "contact", "phone", "mobile", "tel"],
+  amount: ["total amount", "amount", "price", "total"],
   flightNumber: ["flight number", "flight no", "flight"],
   comment: ["comment", "comments", "notes"],
 };
@@ -73,12 +76,15 @@ export interface WorkbookParseResult {
 }
 
 export function parseWorkbook(data: ArrayBuffer): WorkbookParseResult {
-  const workbook = XLSX.read(data, { type: "array" });
+  // cellDates + raw: real Excel date cells come through as Date objects instead
+  // of locale-formatted text ("7/3/26" means July 3 in a US-formatted cell but
+  // would be read as 7 March from the text) — the Date object is unambiguous.
+  const workbook = XLSX.read(data, { type: "array", cellDates: true });
   const sheetName = workbook.SheetNames[0];
   const sheet = workbook.Sheets[sheetName];
   const rows: unknown[][] = XLSX.utils.sheet_to_json(sheet, {
     header: 1,
-    raw: false,
+    raw: true,
     defval: "",
   });
 
@@ -104,11 +110,24 @@ export function parseWorkbook(data: ArrayBuffer): WorkbookParseResult {
     const get = (field: string): string => {
       const idx = headerMap[field];
       if (idx === undefined) return "";
-      return String(raw[idx] ?? "").trim();
+      const value = raw[idx];
+      if (value instanceof Date) return String(value.getTime());
+      return String(value ?? "").trim();
     };
 
-    const localTimeRaw = get("localTime");
-    const localTime = parseLocalDateTime(localTimeRaw);
+    // Local Time: a genuine Excel date cell arrives as a Date (unambiguous);
+    // a text cell falls back to DD/MM/YYYY HH:MM parsing.
+    const localCell = headerMap.localTime !== undefined ? raw[headerMap.localTime] : "";
+    let localTime: number | null;
+    let localTimeRaw: string;
+    if (localCell instanceof Date && !Number.isNaN(localCell.getTime())) {
+      localTime = localCell.getTime();
+      const p = (n: number) => String(n).padStart(2, "0");
+      localTimeRaw = `${p(localCell.getDate())}/${p(localCell.getMonth() + 1)}/${localCell.getFullYear()} ${p(localCell.getHours())}:${p(localCell.getMinutes())}`;
+    } else {
+      localTimeRaw = String(localCell ?? "").trim();
+      localTime = parseLocalDateTime(localTimeRaw);
+    }
 
     parsedRows.push({
       rowId: `row-${i}-${Math.random().toString(36).slice(2, 8)}`,
@@ -116,6 +135,9 @@ export function parseWorkbook(data: ArrayBuffer): WorkbookParseResult {
       clientId: get("id"),
       driverName: get("driver"),
       requestedDriverName: get("requestedDriver"),
+      passengerName: get("passengerName"),
+      passengerContact: get("passengerContact"),
+      amountRaw: get("amount"),
       localTimeRaw,
       localTime,
       from: get("from"),
@@ -221,7 +243,16 @@ export function classifyTrip(row: ParsedTripRow): Trip | null {
     tourWindow,
     presetDriverName: row.driverName,
     requestedDriverName: row.requestedDriverName,
+    passengerName: row.passengerName,
+    passengerContact: row.passengerContact,
+    amount: parseAmount(row.amountRaw),
   };
+}
+
+function parseAmount(raw: string): number | null {
+  if (!raw) return null;
+  const value = parseFloat(raw.replace(",", "."));
+  return Number.isFinite(value) ? value : null;
 }
 
 export function classifyTrips(rows: ParsedTripRow[]): { trips: Trip[]; skipped: number } {

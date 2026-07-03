@@ -7,8 +7,10 @@ interface Props {
   trips: Trip[];
   assignments: Record<string, Assignment>;
   clientPreferences: Record<string, string>;
+  isAssigning: boolean;
   onReassign: (tripId: string, driverId: string | null) => void;
   onSetClientPreference: (clientId: string, driverName: string | null) => void;
+  onAddExtraDriver: () => void;
 }
 
 export default function DispatchBoard({
@@ -16,8 +18,10 @@ export default function DispatchBoard({
   trips,
   assignments,
   clientPreferences,
+  isAssigning,
   onReassign,
   onSetClientPreference,
+  onAddExtraDriver,
 }: Props) {
   const sortedTrips = [...trips].sort((a, b) => a.time - b.time);
   const unassigned = sortedTrips.filter((t) => !assignments[t.id]?.driverId);
@@ -34,6 +38,8 @@ export default function DispatchBoard({
   const redCount = assigned.filter((t) => assignments[t.id]?.color === "red").length;
   const yellowCount = assigned.filter((t) => assignments[t.id]?.color === "yellow").length;
   const warningCount = assigned.filter((t) => assignments[t.id]?.reason).length;
+  const totalAmount = sortedTrips.reduce((sum, t) => sum + (t.amount ?? 0), 0);
+  const coveredAmount = assigned.reduce((sum, t) => sum + (t.amount ?? 0), 0);
 
   return (
     <>
@@ -53,6 +59,11 @@ export default function DispatchBoard({
         <span className={`stat ${warningCount > 0 ? "stat-yellow" : ""}`}>
           <strong>{warningCount}</strong> warning{warningCount === 1 ? "" : "s"}
         </span>
+        {totalAmount > 0 && (
+          <span className={`stat ${coveredAmount < totalAmount ? "stat-yellow" : "stat-green"}`}>
+            revenue covered <strong>{coveredAmount.toFixed(2)}</strong> / {totalAmount.toFixed(2)}
+          </span>
+        )}
         <span className="stat-divider" />
         {drivers.map((driver) => {
           const count = assigned.filter((t) => assignments[t.id]?.driverId === driver.id).length;
@@ -68,6 +79,17 @@ export default function DispatchBoard({
         <div className="lane-header">
           <h3>Needs driver</h3>
           <div className="lane-meta">{unassigned.length} unassigned</div>
+          {unassigned.length > 0 && (
+            <button
+              type="button"
+              className="ghost extra-driver-btn"
+              onClick={onAddExtraDriver}
+              disabled={isAssigning}
+              title="Adds an EXTRA driver to the roster and re-plans the day"
+            >
+              + Extra driver &amp; re-plan
+            </button>
+          )}
         </div>
         <div className="lane-body">
           {unassigned.length === 0 && <p className="empty-state">Everything's covered.</p>}

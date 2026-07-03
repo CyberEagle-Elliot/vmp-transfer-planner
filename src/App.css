@@ -336,6 +336,12 @@
   background: var(--accent-red-bg);
 }
 
+.extra-driver-btn {
+  margin-top: 0.45rem;
+  font-size: 0.75rem;
+  padding: 0.35em 0.7em;
+}
+
 .lane-header h3 {
   font-size: 0.95rem;
 }
@@ -378,6 +384,11 @@
   font-size: 1.1rem;
   font-weight: 800;
   font-variant-numeric: tabular-nums;
+}
+
+.trip-passenger {
+  font-size: 0.9rem;
+  font-weight: 800;
 }
 
 .trip-route {

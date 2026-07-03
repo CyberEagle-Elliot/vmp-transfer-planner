@@ -131,6 +131,30 @@ export default function App() {
     }
   }
 
+  // Adds a placeholder extra driver (rename it in setup later) and re-plans —
+  // one click when the day genuinely needs more vehicles than the roster has.
+  async function handleAddExtraDriver() {
+    const extraCount = roster.filter((d) => d.name.toUpperCase().startsWith("EXTRA")).length;
+    const extra: Driver = {
+      id: `driver-extra-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      name: `EXTRA ${extraCount + 1}`,
+      shiftStart: null,
+      shiftEnd: null,
+      priority: 3,
+    };
+    const nextRoster = [...roster, extra];
+    setRoster(nextRoster);
+    if (trips.length === 0) return;
+    setIsAssigning(true);
+    try {
+      const result = await runPlanning(nextRoster, trips, assignments, waitMode);
+      setAssignments(result);
+    } finally {
+      setIsAssigning(false);
+      setAssignProgress(null);
+    }
+  }
+
   // Toggles between per-ID waiting (60/75) and a flat 60 min for everyone,
   // then immediately re-plans the day under the new rule.
   function handleToggleWaitMode() {
@@ -291,8 +315,10 @@ export default function App() {
             trips={trips}
             assignments={assignments}
             clientPreferences={clientPreferences}
+            isAssigning={isAssigning}
             onReassign={handleReassign}
             onSetClientPreference={handleSetClientPreference}
+            onAddExtraDriver={handleAddExtraDriver}
           />
         </>
       )}

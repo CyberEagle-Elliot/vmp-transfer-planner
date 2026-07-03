@@ -55,6 +55,9 @@ export function loadTrips(): Trip[] {
     clientId: t.clientId ?? "",
     presetDriverName: t.presetDriverName ?? "",
     requestedDriverName: t.requestedDriverName ?? "",
+    passengerName: t.passengerName ?? "",
+    passengerContact: t.passengerContact ?? "",
+    amount: t.amount ?? null,
   }));
 }
 export function saveTrips(trips: Trip[]): void {
